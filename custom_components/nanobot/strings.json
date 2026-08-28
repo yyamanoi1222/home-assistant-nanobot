@@ -1,0 +1,27 @@
+{
+  "title": "nanobot",
+  "config": {
+    "step": {
+      "user": {
+        "data": {
+          "api_url": "API URL",
+          "api_key": "API Key (optional)",
+          "timeout": "Request timeout (seconds)"
+        },
+        "data_description": {
+          "api_url": "The nanobot OpenAI-compatible API endpoint, e.g. http://127.0.0.1:8900",
+          "api_key": "API key only required when nanobot is bound to 0.0.0.0 or LAN",
+          "timeout": "Maximum seconds to wait for a response from nanobot"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to nanobot. Please check the API URL.",
+      "invalid_auth": "Invalid API key or nanobot refused authentication.",
+      "unknown": "Unexpected error occurred while connecting to nanobot."
+    },
+    "abort": {
+      "already_configured": "This nanobot API URL is already configured."
+    }
+  }
+}

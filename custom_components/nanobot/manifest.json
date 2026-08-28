@@ -1,0 +1,12 @@
+{
+  "domain": "nanobot",
+  "name": "nanobot",
+  "codeowners": ["@yyamanoi1222"],
+  "config_flow": true,
+  "dependencies": ["conversation"],
+  "documentation": "https://github.com/yyamanoi1222/home-assistant-nanobot",
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "requirements": [],
+  "version": "0.1.0"
+}
