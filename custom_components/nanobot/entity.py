@@ -55,7 +55,17 @@ class NanobotBaseConversationEntity(ConversationEntity):
 
         We map Home Assistant's conversation_id directly to nanobot's
         session_id so that nanobot persists the conversation context.
+
+        nanobot's API requires exactly one user message per request; we
+        always send only the latest user utterance and rely on session_id
+        for continuity.
         """
+        text = (user_input.text or "").strip()
+        if not text:
+            intent_response = IntentResponse(language=user_input.language)
+            intent_response.async_set_speech("I didn't catch that.")
+            return ConversationResult(response=intent_response)
+
         session = async_get_clientsession(self.hass)
         client = NanobotClient(
             session=session,
@@ -66,7 +76,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
 
         try:
             response_text = await client.send_message(
-                text=user_input.text,
+                text=text,
                 session_id=user_input.conversation_id,
             )
         except NanobotClientError as err:

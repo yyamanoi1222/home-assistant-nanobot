@@ -99,10 +99,10 @@ class NanobotClient:
     ) -> str:
         """Send a user message to nanobot and return the assistant reply.
 
-        Nanobot's OpenAI-compatible endpoint currently accepts a single user
-        message per request and manages conversation history internally via
-        ``session_id``. We therefore map Home Assistant's ``conversation_id``
-        directly to nanobot's ``session_id`` and do not send message history.
+        nanobot's OpenAI-compatible endpoint requires exactly one user message
+        per request and manages conversation history internally via ``session_id``.
+        We therefore always send a single message and map Home Assistant's
+        ``conversation_id`` directly to nanobot's ``session_id``.
 
         Args:
             text: The user utterance to send.
@@ -114,10 +114,15 @@ class NanobotClient:
         Raises:
             NanobotConnectionError: If the request fails due to network issues.
             NanobotAPIError: If the API returns an error or an unexpected body.
+            ValueError: If ``text`` is empty or contains only whitespace.
         """
+        stripped_text = (text or "").strip()
+        if not stripped_text:
+            raise ValueError("text must not be empty")
+
         url = f"{self._api_url}/v1/chat/completions"
         payload: dict[str, Any] = {
-            "messages": [{"role": "user", "content": text}],
+            "messages": [{"role": "user", "content": stripped_text}],
             "stream": False,
         }
         if session_id is not None:
