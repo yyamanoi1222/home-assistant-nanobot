@@ -46,7 +46,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry_id)},
             "name": "nanobot",
-            "manufacturer": "HKUDS",
+            "manufacturer": "yyamanoi1222",
             "model": "nanobot",
             "entry_type": "service",
         }
