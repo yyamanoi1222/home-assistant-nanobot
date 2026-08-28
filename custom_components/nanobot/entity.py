@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.intent import IntentResponse
 
-from .const import CONF_API_KEY, CONF_API_URL, CONF_TIMEOUT, DOMAIN, LOGGER
+from .const import CONF_API_KEY, CONF_API_URL, CONF_MODEL, CONF_TIMEOUT, DOMAIN, LOGGER
 from .nanobot_client import NanobotClient, NanobotClientError
 
 
@@ -33,12 +33,13 @@ class NanobotBaseConversationEntity(ConversationEntity):
         Args:
             hass: Home Assistant instance.
             entry_id: Config entry identifier.
-            config: Entry data containing api_url, api_key, and timeout.
+            config: Entry data containing api_url, api_key, model, and timeout.
         """
         self.hass = hass
         self._entry_id = entry_id
         self._api_url = config[CONF_API_URL]
         self._api_key = config.get(CONF_API_KEY)
+        self._model = config.get(CONF_MODEL)
         self._timeout = config.get(CONF_TIMEOUT, 120)
 
         self._attr_unique_id = entry_id
@@ -78,6 +79,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
             response_text = await client.send_message(
                 text=text,
                 session_id=user_input.conversation_id,
+                model=self._model,
             )
         except NanobotClientError as err:
             LOGGER.error("nanobot conversation error: %s", err)

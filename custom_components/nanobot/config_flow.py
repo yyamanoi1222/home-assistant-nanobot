@@ -19,6 +19,7 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_API_URL,
+    CONF_MODEL,
     CONF_TIMEOUT,
     DEFAULT_API_URL,
     DEFAULT_TIMEOUT,
@@ -35,6 +36,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_API_URL, default=DEFAULT_API_URL): str,
         vol.Optional(CONF_API_KEY): str,
+        vol.Optional(CONF_MODEL): str,
         vol.Required(CONF_TIMEOUT, default=DEFAULT_TIMEOUT): vol.All(
             NumberSelector(
                 NumberSelectorConfig(

@@ -14,6 +14,7 @@ from custom_components.nanobot.config_flow import (
 )
 from custom_components.nanobot.const import (
     CONF_API_URL,
+    CONF_MODEL,
     CONF_TIMEOUT,
     DEFAULT_API_URL,
     DEFAULT_TIMEOUT,
@@ -43,6 +44,7 @@ async def test_user_flow_success(hass: HomeAssistant) -> None:
             {
                 CONF_API_URL: DEFAULT_API_URL,
                 CONF_API_KEY: "",
+                CONF_MODEL: "MiniMax-M2.7",
                 CONF_TIMEOUT: DEFAULT_TIMEOUT,
             }
         )
@@ -52,6 +54,7 @@ async def test_user_flow_success(hass: HomeAssistant) -> None:
     assert result["data"] == {
         CONF_API_URL: DEFAULT_API_URL,
         CONF_API_KEY: "",
+        CONF_MODEL: "MiniMax-M2.7",
         CONF_TIMEOUT: DEFAULT_TIMEOUT,
     }
 
@@ -119,4 +122,19 @@ async def test_user_flow_already_configured(hass: HomeAssistant) -> None:
 def test_step_user_data_schema() -> None:
     """Test the data schema defaults."""
     schema = STEP_USER_DATA_SCHEMA
-    assert schema({CONF_API_URL: DEFAULT_API_URL, CONF_TIMEOUT: DEFAULT_TIMEOUT})
+def test_step_user_data_schema_optional_model() -> None:
+    """Test the data schema accepts model as optional."""
+    schema = STEP_USER_DATA_SCHEMA
+    assert schema(
+        {
+            CONF_API_URL: DEFAULT_API_URL,
+            CONF_TIMEOUT: DEFAULT_TIMEOUT,
+        }
+    )
+    assert schema(
+        {
+            CONF_API_URL: DEFAULT_API_URL,
+            CONF_TIMEOUT: DEFAULT_TIMEOUT,
+            CONF_MODEL: "MiniMax-M2.7",
+        }
+    )

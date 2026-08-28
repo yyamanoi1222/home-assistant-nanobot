@@ -96,6 +96,30 @@ async def test_send_message_no_session_id() -> None:
     assert result == "OK"
     call_kwargs = session.post.call_args.kwargs
     assert "session_id" not in call_kwargs["json"]
+    assert "model" not in call_kwargs["json"]
+
+
+async def test_send_message_with_model() -> None:
+    """Test sending a request with an explicit model."""
+    session = MagicMock(spec=aiohttp.ClientSession)
+    response = MagicMock(spec=aiohttp.ClientResponse)
+    response.ok = True
+    response.json = AsyncMock(
+        return_value={
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+        }
+    )
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    session.post.return_value = cm
+
+    client = NanobotClient(session=session, api_url="http://127.0.0.1:8900")
+    result = await client.send_message("Hello", model="MiniMax-M2.7")
+
+    assert result == "OK"
+    call_kwargs = session.post.call_args.kwargs
+    assert call_kwargs["json"]["model"] == "MiniMax-M2.7"
 
 
 async def test_send_message_api_key_header() -> None:

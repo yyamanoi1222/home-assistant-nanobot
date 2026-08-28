@@ -6,11 +6,13 @@
         "data": {
           "api_url": "API URL",
           "api_key": "API Key (optional)",
+          "model": "Model (optional)",
           "timeout": "Request timeout (seconds)"
         },
         "data_description": {
           "api_url": "The nanobot OpenAI-compatible API endpoint, e.g. http://127.0.0.1:8900",
           "api_key": "API key only required when nanobot is bound to 0.0.0.0 or LAN",
+          "model": "Model name shown by /v1/models; leave empty to use nanobot's default",
           "timeout": "Maximum seconds to wait for a response from nanobot"
         }
       }

@@ -95,7 +95,10 @@ class NanobotClient:
             ) from err
 
     async def send_message(
-        self, text: str, session_id: str | None = None
+        self,
+        text: str,
+        session_id: str | None = None,
+        model: str | None = None,
     ) -> str:
         """Send a user message to nanobot and return the assistant reply.
 
@@ -107,6 +110,9 @@ class NanobotClient:
         Args:
             text: The user utterance to send.
             session_id: Optional session identifier for conversation continuity.
+            model: Optional model name. When provided it must match a model
+                returned by ``/v1/models``. Leave unset to use nanobot's
+                configured default model.
 
         Returns:
             The assistant response text.
@@ -127,6 +133,8 @@ class NanobotClient:
         }
         if session_id is not None:
             payload["session_id"] = session_id
+        if model is not None:
+            payload["model"] = model
 
         LOGGER.debug(
             "Sending request to nanobot (%s): %s",
