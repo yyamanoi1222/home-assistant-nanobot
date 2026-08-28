@@ -7,6 +7,7 @@
   "documentation": "https://github.com/yyamanoi1222/home-assistant-nanobot",
   "integration_type": "service",
   "iot_class": "local_push",
+  "issue_tracker": "https://github.com/yyamanoi1222/home-assistant-nanobot/issues",
   "requirements": [],
   "version": "0.1.0"
 }
