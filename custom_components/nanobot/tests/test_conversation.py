@@ -57,6 +57,7 @@ async def test_conversation_entity_process(hass: HomeAssistant) -> None:
 
     assert isinstance(result, ConversationResult)
     assert result.response.speech["plain"]["speech"] == "Hi there!"
+    assert result.conversation_id == "test-conversation"
 
 
 async def test_conversation_entity_error(hass: HomeAssistant) -> None:
@@ -170,3 +171,33 @@ async def test_conversation_entity_session_id_falls_back_to_device_id(
     send_message.assert_awaited_once()
     call_kwargs = send_message.call_args.kwargs
     assert call_kwargs["session_id"] == "kitchen-speaker"
+
+
+async def test_conversation_entity_session_id_falls_back_to_entry_id(
+    hass: HomeAssistant,
+) -> None:
+    """Test session_id falls back to entry-scoped id when neither id is present."""
+    from custom_components.nanobot.conversation import NanobotConversationEntity
+
+    config_entry = MagicMock()
+    config_entry.entry_id = "test-entry"
+    entity = NanobotConversationEntity(
+        hass, config_entry=config_entry, config=TEST_CONFIG
+    )
+
+    user_input = _make_input("Hello", conversation_id=None, device_id=None)
+
+    send_message = AsyncMock(return_value="OK")
+    with patch(
+        "custom_components.nanobot.entity.async_get_clientsession",
+        return_value=MagicMock(),
+    ), patch(
+        "custom_components.nanobot.entity.NanobotClient.send_message",
+        new=send_message,
+    ):
+        result = await entity.async_process(user_input)
+
+    send_message.assert_awaited_once()
+    call_kwargs = send_message.call_args.kwargs
+    assert call_kwargs["session_id"] == "nanobot-test-entry"
+    assert result.conversation_id == "nanobot-test-entry"

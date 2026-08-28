@@ -97,4 +97,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
 
         intent_response = IntentResponse(language=user_input.language)
         intent_response.async_set_speech(response_text)
-        return ConversationResult(response=intent_response)
+        return ConversationResult(
+            response=intent_response,
+            conversation_id=session_id,
+        )
