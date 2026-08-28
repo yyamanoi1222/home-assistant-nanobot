@@ -54,8 +54,11 @@ class NanobotBaseConversationEntity(ConversationEntity):
     async def async_process(self, user_input: ConversationInput) -> ConversationResult:
         """Process a user message via nanobot.
 
-        We map Home Assistant's conversation_id directly to nanobot's
-        session_id so that nanobot persists the conversation context.
+        Home Assistant's Assist pipeline (especially voice) supplies a new
+        ``conversation_id`` on every turn. To preserve context across turns we
+        stabilize the nanobot ``session_id`` by falling back to the
+        ``device_id`` when no meaningful conversation ID is present, or by
+        using the caller-supplied ``conversation_id`` as-is.
 
         nanobot's API requires exactly one user message per request; we
         always send only the latest user utterance and rely on session_id
@@ -66,6 +69,13 @@ class NanobotBaseConversationEntity(ConversationEntity):
             intent_response = IntentResponse(language=user_input.language)
             intent_response.async_set_speech("I didn't catch that.")
             return ConversationResult(response=intent_response)
+
+        # Stabilize session_id for Assist pipelines that rotate conversation_id.
+        session_id = user_input.conversation_id
+        if not session_id:
+            session_id = user_input.device_id
+        if not session_id:
+            session_id = f"{DOMAIN}-{self._entry_id}"
 
         session = async_get_clientsession(self.hass)
         client = NanobotClient(
@@ -78,7 +88,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
         try:
             response_text = await client.send_message(
                 text=text,
-                session_id=user_input.conversation_id,
+                session_id=session_id,
                 model=self._model,
             )
         except NanobotClientError as err:

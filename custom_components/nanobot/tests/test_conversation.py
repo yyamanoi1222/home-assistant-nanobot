@@ -18,13 +18,17 @@ TEST_CONFIG = {
 }
 
 
-def _make_input(text: str, conversation_id: str | None = None) -> ConversationInput:
+def _make_input(
+    text: str,
+    conversation_id: str | None = None,
+    device_id: str | None = None,
+) -> ConversationInput:
     """Create a ConversationInput for tests."""
     return ConversationInput(
         text=text,
         context=MagicMock(),
         conversation_id=conversation_id,
-        device_id=None,
+        device_id=device_id,
         language="ja",
         agent_id="test-agent",
     )
@@ -137,3 +141,32 @@ async def test_conversation_entity_model_mapping(hass: HomeAssistant) -> None:
     send_message.assert_awaited_once()
     call_kwargs = send_message.call_args.kwargs
     assert call_kwargs["model"] == "MiniMax-M2.7"
+
+
+async def test_conversation_entity_session_id_falls_back_to_device_id(
+    hass: HomeAssistant,
+) -> None:
+    """Test session_id falls back to device_id when conversation_id is absent."""
+    from custom_components.nanobot.conversation import NanobotConversationEntity
+
+    config_entry = MagicMock()
+    config_entry.entry_id = "test-entry"
+    entity = NanobotConversationEntity(
+        hass, config_entry=config_entry, config=TEST_CONFIG
+    )
+
+    user_input = _make_input("Hello", conversation_id=None, device_id="kitchen-speaker")
+
+    send_message = AsyncMock(return_value="OK")
+    with patch(
+        "custom_components.nanobot.entity.async_get_clientsession",
+        return_value=MagicMock(),
+    ), patch(
+        "custom_components.nanobot.entity.NanobotClient.send_message",
+        new=send_message,
+    ):
+        await entity.async_process(user_input)
+
+    send_message.assert_awaited_once()
+    call_kwargs = send_message.call_args.kwargs
+    assert call_kwargs["session_id"] == "kitchen-speaker"
