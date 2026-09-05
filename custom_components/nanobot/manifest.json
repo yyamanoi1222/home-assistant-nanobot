@@ -9,5 +9,6 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/yyamanoi1222/home-assistant-nanobot/issues",
   "requirements": [],
-  "version": "0.1.2"
+  "homeassistant": "2025.3.0",
+  "version": "0.2.0"
 }

@@ -1,6 +1,6 @@
 {
   "name": "nanobot",
   "content_in_root": false,
-  "homeassistant": "2024.12.0",
+  "homeassistant": "2025.3.0",
   "hacs": "2.0.0"
 }

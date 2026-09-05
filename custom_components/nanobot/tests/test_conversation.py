@@ -24,14 +24,22 @@ def _make_input(
     device_id: str | None = None,
 ) -> ConversationInput:
     """Create a ConversationInput for tests."""
-    return ConversationInput(
-        text=text,
-        context=MagicMock(),
-        conversation_id=conversation_id,
-        device_id=device_id,
-        language="ja",
-        agent_id="test-agent",
-    )
+    from dataclasses import fields
+
+    kwargs: dict = {
+        "text": text,
+        "context": MagicMock(),
+        "conversation_id": conversation_id,
+        "device_id": device_id,
+        "language": "ja",
+        "agent_id": "test-agent",
+    }
+    names = {f.name for f in fields(ConversationInput)}
+    if "satellite_id" in names:
+        kwargs["satellite_id"] = None
+    if "extra_system_prompt" in names:
+        kwargs["extra_system_prompt"] = None
+    return ConversationInput(**kwargs)
 
 
 async def test_conversation_entity_process(hass: HomeAssistant) -> None:
@@ -201,3 +209,34 @@ async def test_conversation_entity_session_id_falls_back_to_entry_id(
     call_kwargs = send_message.call_args.kwargs
     assert call_kwargs["session_id"] == "nanobot-test-entry"
     assert result.conversation_id == "nanobot-test-entry"
+
+
+async def _process_with_reply(hass: HomeAssistant, reply: str):
+    from custom_components.nanobot.conversation import NanobotConversationEntity
+
+    config_entry = MagicMock()
+    config_entry.entry_id = "test-entry"
+    entity = NanobotConversationEntity(
+        hass, config_entry=config_entry, config=TEST_CONFIG
+    )
+    user_input = _make_input("Hello", conversation_id="test-conversation")
+    with patch(
+        "custom_components.nanobot.entity.async_get_clientsession",
+        return_value=MagicMock(),
+    ), patch(
+        "custom_components.nanobot.entity.NanobotClient.send_message",
+        new=AsyncMock(return_value=reply),
+    ):
+        return await entity.async_process(user_input)
+
+
+async def test_continue_conversation_always_on_success(hass: HomeAssistant) -> None:
+    from dataclasses import fields
+
+    from homeassistant.components.conversation import ConversationResult
+
+    if "continue_conversation" not in {f.name for f in fields(ConversationResult)}:
+        return
+    for reply in ("How can I help?", "Done.", "こんにちは"):
+        result = await _process_with_reply(hass, reply)
+        assert result.continue_conversation is True

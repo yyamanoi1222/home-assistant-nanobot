@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
+
 from homeassistant.components.conversation import (
     ConversationEntity,
     ConversationInput,
@@ -13,6 +15,22 @@ from homeassistant.helpers.intent import IntentResponse
 
 from .const import CONF_API_KEY, CONF_API_URL, CONF_MODEL, CONF_TIMEOUT, DOMAIN, LOGGER
 from .nanobot_client import NanobotClient, NanobotClientError
+
+_CONVERSATION_RESULT_FIELDS = {f.name for f in fields(ConversationResult)}
+
+
+def _make_result(
+    response: IntentResponse,
+    conversation_id: str | None,
+    continue_conversation: bool,
+) -> ConversationResult:
+    if "continue_conversation" in _CONVERSATION_RESULT_FIELDS:
+        return ConversationResult(
+            response=response,
+            conversation_id=conversation_id,
+            continue_conversation=continue_conversation,
+        )
+    return ConversationResult(response=response, conversation_id=conversation_id)
 
 
 class NanobotBaseConversationEntity(ConversationEntity):
@@ -68,7 +86,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
         if not text:
             intent_response = IntentResponse(language=user_input.language)
             intent_response.async_set_speech("I didn't catch that.")
-            return ConversationResult(response=intent_response)
+            return _make_result(intent_response, None, False)
 
         # Stabilize session_id for Assist pipelines that rotate conversation_id.
         session_id = user_input.conversation_id
@@ -93,11 +111,10 @@ class NanobotBaseConversationEntity(ConversationEntity):
             )
         except NanobotClientError as err:
             LOGGER.error("nanobot conversation error: %s", err)
-            response_text = "Sorry, I could not reach nanobot."
+            intent_response = IntentResponse(language=user_input.language)
+            intent_response.async_set_speech("Sorry, I could not reach nanobot.")
+            return _make_result(intent_response, session_id, False)
 
         intent_response = IntentResponse(language=user_input.language)
         intent_response.async_set_speech(response_text)
-        return ConversationResult(
-            response=intent_response,
-            conversation_id=session_id,
-        )
+        return _make_result(intent_response, session_id, True)
