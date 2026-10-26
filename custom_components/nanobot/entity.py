@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import fields
 
 from homeassistant.components.conversation import (
@@ -17,12 +18,31 @@ from .const import CONF_API_KEY, CONF_API_URL, CONF_MODEL, CONF_TIMEOUT, DOMAIN,
 from .nanobot_client import NanobotClient, NanobotClientError
 
 _CONVERSATION_RESULT_FIELDS = {f.name for f in fields(ConversationResult)}
+_ECHO_MIN_LENGTH = 8
+_NON_WORD_RE = re.compile(r"[\W_]+", re.UNICODE)
+
+
+def _normalize_for_echo(text: str) -> str:
+    """Normalize text so spoken echo can be compared with a reply."""
+    return _NON_WORD_RE.sub("", text.lower())
+
+
+def _looks_like_echo(text: str, last_response: str | None) -> bool:
+    """Return True when user input exactly echoes the previous reply."""
+    if not last_response:
+        return False
+
+    normalized_text = _normalize_for_echo(text)
+    if len(normalized_text) < _ECHO_MIN_LENGTH:
+        return False
+
+    return normalized_text == _normalize_for_echo(last_response)
 
 
 def _make_result(
     response: IntentResponse,
     conversation_id: str | None,
-    continue_conversation: bool,
+    continue_conversation: bool = False,
 ) -> ConversationResult:
     if "continue_conversation" in _CONVERSATION_RESULT_FIELDS:
         return ConversationResult(
@@ -59,6 +79,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
         self._api_key = config.get(CONF_API_KEY)
         self._model = config.get(CONF_MODEL)
         self._timeout = config.get(CONF_TIMEOUT, 120)
+        self._last_response_text: str | None = None
 
         self._attr_unique_id = entry_id
         self._attr_device_info = {
@@ -80,7 +101,10 @@ class NanobotBaseConversationEntity(ConversationEntity):
 
         nanobot's API requires exactly one user message per request; we
         always send only the latest user utterance and rely on session_id
-        for continuity.
+        for continuity. Successful replies keep the conversation open so
+        Assist listens for a follow-up. If speech-to-text echoes the previous
+        reply back, the input is dropped instead of being sent to nanobot
+        again.
         """
         text = (user_input.text or "").strip()
         if not text:
@@ -94,6 +118,12 @@ class NanobotBaseConversationEntity(ConversationEntity):
             session_id = user_input.device_id
         if not session_id:
             session_id = f"{DOMAIN}-{self._entry_id}"
+
+        if _looks_like_echo(text, self._last_response_text):
+            LOGGER.debug("Ignoring possible echo of the previous reply: %s", text)
+            return _make_result(
+                IntentResponse(language=user_input.language), session_id, False
+            )
 
         session = async_get_clientsession(self.hass)
         client = NanobotClient(
@@ -117,4 +147,5 @@ class NanobotBaseConversationEntity(ConversationEntity):
 
         intent_response = IntentResponse(language=user_input.language)
         intent_response.async_set_speech(response_text)
+        self._last_response_text = response_text
         return _make_result(intent_response, session_id, True)

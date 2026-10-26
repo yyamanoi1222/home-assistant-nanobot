@@ -237,6 +237,78 @@ async def test_continue_conversation_always_on_success(hass: HomeAssistant) -> N
 
     if "continue_conversation" not in {f.name for f in fields(ConversationResult)}:
         return
-    for reply in ("How can I help?", "Done.", "こんにちは"):
+
+    for reply in ("How can I help?", "Done.", "こんにちは", "以上です。"):
         result = await _process_with_reply(hass, reply)
         assert result.continue_conversation is True
+
+
+async def test_conversation_entity_ignores_echoed_reply(hass: HomeAssistant) -> None:
+    """Test a reply echoed back by speech-to-text is not sent to nanobot."""
+    from custom_components.nanobot.conversation import NanobotConversationEntity
+
+    config_entry = MagicMock()
+    config_entry.entry_id = "test-entry"
+    entity = NanobotConversationEntity(
+        hass, config_entry=config_entry, config=TEST_CONFIG
+    )
+
+    send_message = AsyncMock(
+        return_value="明日の天気は晴れです。気温は25度になります。他に知りたいことはありますか？"
+    )
+    with patch(
+        "custom_components.nanobot.entity.async_get_clientsession",
+        return_value=MagicMock(),
+    ), patch(
+        "custom_components.nanobot.entity.NanobotClient.send_message",
+        new=send_message,
+    ):
+        first = await entity.async_process(
+            _make_input("明日の天気は？", conversation_id="test-conversation")
+        )
+        second = await entity.async_process(
+            _make_input(
+                "明日の天気は晴れです、気温は25度になります。他に知りたいことはありますか",
+                conversation_id="new-conversation-id",
+            )
+        )
+
+    assert send_message.await_count == 1
+
+    from dataclasses import fields
+
+    from homeassistant.components.conversation import ConversationResult
+
+    if "continue_conversation" in {f.name for f in fields(ConversationResult)}:
+        assert first.continue_conversation is True
+        assert second.continue_conversation is False
+
+
+async def test_conversation_entity_does_not_drop_short_reply(
+    hass: HomeAssistant,
+) -> None:
+    """Test short follow-ups are not mistaken for echoes."""
+    from custom_components.nanobot.conversation import NanobotConversationEntity
+
+    config_entry = MagicMock()
+    config_entry.entry_id = "test-entry"
+    entity = NanobotConversationEntity(
+        hass, config_entry=config_entry, config=TEST_CONFIG
+    )
+
+    send_message = AsyncMock(return_value="明日の天気は晴れです。気温は25度になります。")
+    with patch(
+        "custom_components.nanobot.entity.async_get_clientsession",
+        return_value=MagicMock(),
+    ), patch(
+        "custom_components.nanobot.entity.NanobotClient.send_message",
+        new=send_message,
+    ):
+        await entity.async_process(
+            _make_input("明日の天気は？", conversation_id="test-conversation")
+        )
+        await entity.async_process(
+            _make_input("はい", conversation_id="test-conversation")
+        )
+
+    assert send_message.await_count == 2
