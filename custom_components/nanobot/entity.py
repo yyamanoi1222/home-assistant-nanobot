@@ -41,7 +41,7 @@ def _normalize_for_echo(text: str) -> str:
 
 
 def _looks_like_echo(text: str, last_response: str | None) -> bool:
-    """Return True when user input exactly echoes the previous reply."""
+    """Return True when user input is part of the previous reply."""
     if not last_response:
         return False
 
@@ -49,7 +49,7 @@ def _looks_like_echo(text: str, last_response: str | None) -> bool:
     if len(normalized_text) < _ECHO_MIN_LENGTH:
         return False
 
-    return normalized_text == _normalize_for_echo(last_response)
+    return normalized_text in _normalize_for_echo(last_response)
 
 
 def _make_result(
@@ -116,6 +116,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
         self._model = config.get(CONF_MODEL)
         self._timeout = config.get(CONF_TIMEOUT, 120)
         self._voice_prompt = config.get(CONF_VOICE_PROMPT, DEFAULT_VOICE_PROMPT)
+        self._prompted_sessions: set[str] = set()
         self._last_response_text: str | None = None
 
         self._attr_unique_id = entry_id
@@ -142,11 +143,13 @@ class NanobotBaseConversationEntity(ConversationEntity):
 
         nanobot's API requires exactly one user message per request; we
         always send only the latest user utterance and rely on session_id
-        for continuity. Reply tokens are streamed into the chat log so the
-        Assist pipeline can start TTS before the full answer is generated.
-        Successful replies keep the conversation open so Assist listens for a
-        follow-up. If speech-to-text echoes the previous reply back, the input
-        is dropped instead of being sent to nanobot again.
+        for continuity. The configured voice prompt is prepended to the first
+        request of each session. Reply tokens are streamed into the chat log
+        so the Assist pipeline can start TTS before the full answer is
+        generated. Successful replies keep the conversation open so Assist
+        listens for a follow-up. If speech-to-text echoes part of the previous
+        reply back, the input is dropped instead of being sent to nanobot
+        again.
         """
         text = (user_input.text or "").strip()
         if not text:
@@ -212,7 +215,8 @@ class NanobotBaseConversationEntity(ConversationEntity):
     ) -> AsyncGenerator[AssistantContentDeltaDict, None]:
         """Translate nanobot SSE fragments into chat log deltas."""
         voice_prompt = (self._voice_prompt or "").strip()
-        message = f"{voice_prompt}\n\n{text}" if voice_prompt else text
+        inject_prompt = bool(voice_prompt) and session_id not in self._prompted_sessions
+        message = f"{voice_prompt}\n\n{text}" if inject_prompt else text
 
         first = True
         async for token in client.send_message_stream(
@@ -220,6 +224,9 @@ class NanobotBaseConversationEntity(ConversationEntity):
             session_id=session_id,
             model=self._model,
         ):
+            if inject_prompt:
+                self._prompted_sessions.add(session_id)
+                inject_prompt = False
             if first:
                 yield {"role": "assistant", "content": token}
                 first = False

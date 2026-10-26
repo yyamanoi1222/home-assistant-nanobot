@@ -61,4 +61,4 @@ service: conversation.process
 - Device control through Home Assistant is not supported because nanobot's OpenAI-compatible endpoint does not expose tool/function calling to external clients.
 - Streaming TTS requires a TTS engine that implements `async_stream_tts_audio` (for example, Microsoft Edge TTS). Assist only starts streaming after roughly 60 characters, so short replies still wait for the full answer.
 - nanobot emits every generation segment on its SSE stream, including text produced before a tool call. The OpenAI-compatible protocol has no segment delimiter, so such intermediate text may also be spoken.
-- The voice response prompt is prepended to every request from this integration and is therefore stored in nanobot's session history. Other nanobot channels such as Discord are unaffected.
+- The voice response prompt is prepended to the first request of each HA session and is therefore stored in nanobot's session history. Other nanobot channels such as Discord are unaffected.

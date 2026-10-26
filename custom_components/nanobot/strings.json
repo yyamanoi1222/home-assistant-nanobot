@@ -15,7 +15,7 @@
           "api_key": "API key only required when nanobot is bound to 0.0.0.0 or LAN",
           "model": "Model name shown by /v1/models; leave empty to use nanobot's default",
           "timeout": "Maximum seconds to wait for a response from nanobot",
-          "voice_prompt": "Instructions prepended to each request so spoken replies stay short and free of formatting. Leave empty to disable."
+          "voice_prompt": "Instructions prepended to the first request of each session so spoken replies stay short and free of formatting. Leave empty to disable."
         }
       }
     },
@@ -35,7 +35,7 @@
           "voice_prompt": "Voice response prompt"
         },
         "data_description": {
-          "voice_prompt": "Instructions prepended to each request so spoken replies stay short and free of formatting. Leave empty to disable."
+          "voice_prompt": "Instructions prepended to the first request of each session so spoken replies stay short and free of formatting. Leave empty to disable."
         }
       }
     }

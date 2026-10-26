@@ -376,3 +376,79 @@ async def test_empty_voice_prompt_is_disabled(hass: HomeAssistant) -> None:
     message = await _send_and_get_message(hass, {**TEST_CONFIG, CONF_VOICE_PROMPT: ""})
 
     assert message == "Hello"
+
+
+async def test_voice_prompt_only_on_first_turn(hass: HomeAssistant) -> None:
+    """Test the voice prompt is only prepended to the first turn of a session."""
+    entity = _make_entity(hass)
+    stream = _RecordingStream("OK")
+
+    with (
+        patch(
+            "custom_components.nanobot.entity.async_get_clientsession",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            new=stream,
+        ),
+    ):
+        await _process(entity, _make_input("Hello", conversation_id="same"))
+        await _process(entity, _make_input("Again", conversation_id="same"))
+
+    assert stream.calls[0]["text"] == f"{DEFAULT_VOICE_PROMPT}\n\nHello"
+    assert stream.calls[1]["text"] == "Again"
+
+
+async def test_voice_prompt_reapplied_for_new_session(hass: HomeAssistant) -> None:
+    """Test a new session receives the voice prompt again."""
+    entity = _make_entity(hass)
+    stream = _RecordingStream("OK")
+
+    with (
+        patch(
+            "custom_components.nanobot.entity.async_get_clientsession",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            new=stream,
+        ),
+    ):
+        await _process(entity, _make_input("Hello", conversation_id="one"))
+        await _process(entity, _make_input("Again", conversation_id="two"))
+
+    assert stream.calls[0]["text"] == f"{DEFAULT_VOICE_PROMPT}\n\nHello"
+    assert stream.calls[1]["text"] == f"{DEFAULT_VOICE_PROMPT}\n\nAgain"
+
+
+async def test_conversation_entity_ignores_partial_echo(
+    hass: HomeAssistant,
+) -> None:
+    """Test a partial echo of the previous reply is not sent to nanobot."""
+    entity = _make_entity(hass)
+    stream = _RecordingStream(
+        "明日の天気は晴れです。気温は25度になります。他に知りたいことはありますか？"
+    )
+
+    with (
+        patch(
+            "custom_components.nanobot.entity.async_get_clientsession",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            new=stream,
+        ),
+    ):
+        await _process(
+            entity,
+            _make_input("明日の天気は？", conversation_id="test-conversation"),
+        )
+        second = await _process(
+            entity,
+            _make_input("気温は25度になります", conversation_id="test-conversation"),
+        )
+
+    assert len(stream.calls) == 1
+    assert second.continue_conversation is False
