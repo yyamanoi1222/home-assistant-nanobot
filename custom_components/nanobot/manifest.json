@@ -10,5 +10,5 @@
   "issue_tracker": "https://github.com/yyamanoi1222/home-assistant-nanobot/issues",
   "requirements": [],
   "homeassistant": "2025.7.0",
-  "version": "0.3.0"
+  "version": "0.4.0"
 }
