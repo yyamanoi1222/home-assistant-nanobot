@@ -7,13 +7,15 @@
           "api_url": "API URL",
           "api_key": "API Key (optional)",
           "model": "Model (optional)",
-          "timeout": "Request timeout (seconds)"
+          "timeout": "Request timeout (seconds)",
+          "voice_prompt": "Voice response prompt"
         },
         "data_description": {
           "api_url": "The nanobot OpenAI-compatible API endpoint, e.g. http://127.0.0.1:8900",
           "api_key": "API key only required when nanobot is bound to 0.0.0.0 or LAN",
           "model": "Model name shown by /v1/models; leave empty to use nanobot's default",
-          "timeout": "Maximum seconds to wait for a response from nanobot"
+          "timeout": "Maximum seconds to wait for a response from nanobot",
+          "voice_prompt": "Instructions prepended to each request so spoken replies stay short and free of formatting. Leave empty to disable."
         }
       }
     },
@@ -24,6 +26,18 @@
     },
     "abort": {
       "already_configured": "This nanobot API URL is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "voice_prompt": "Voice response prompt"
+        },
+        "data_description": {
+          "voice_prompt": "Instructions prepended to each request so spoken replies stay short and free of formatting. Leave empty to disable."
+        }
+      }
     }
   }
 }

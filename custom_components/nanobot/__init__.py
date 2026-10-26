@@ -26,7 +26,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: NanobotConfigEntry) -> bool:
     """Set up nanobot from a config entry."""
     entry.runtime_data = NanobotRuntimeData(
-        config=dict(entry.data), title=entry.title
+        config={**entry.data, **entry.options}, title=entry.title
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -43,6 +43,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: NanobotConfigEntry) -> 
 async def async_update_listener(hass: HomeAssistant, entry: NanobotConfigEntry) -> None:
     """Handle options update."""
     entry.runtime_data = NanobotRuntimeData(
-        config=dict(entry.data), title=entry.title
+        config={**entry.data, **entry.options}, title=entry.title
     )
     await hass.config_entries.async_reload(entry.entry_id)

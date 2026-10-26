@@ -11,7 +11,13 @@ from homeassistant.components.conversation import (
 from homeassistant.const import CONF_API_KEY
 from homeassistant.core import HomeAssistant
 
-from custom_components.nanobot.const import CONF_API_URL, CONF_MODEL, CONF_TIMEOUT
+from custom_components.nanobot.const import (
+    CONF_API_URL,
+    CONF_MODEL,
+    CONF_TIMEOUT,
+    CONF_VOICE_PROMPT,
+    DEFAULT_VOICE_PROMPT,
+)
 from custom_components.nanobot.nanobot_client import NanobotConnectionError
 
 TEST_CONFIG = {
@@ -325,3 +331,48 @@ async def test_conversation_entity_does_not_drop_short_reply(
         await _process(entity, _make_input("はい", conversation_id="test-conversation"))
 
     assert len(stream.calls) == 2
+
+
+async def _send_and_get_message(hass: HomeAssistant, config: dict | None = None) -> str:
+    """Run one turn and return the text sent to nanobot."""
+    entity = _make_entity(hass, config)
+    stream = _RecordingStream("OK")
+
+    with (
+        patch(
+            "custom_components.nanobot.entity.async_get_clientsession",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            new=stream,
+        ),
+    ):
+        await _process(
+            entity, _make_input("Hello", conversation_id="test-conversation")
+        )
+
+    return stream.calls[0]["text"]
+
+
+async def test_default_voice_prompt_is_prepended(hass: HomeAssistant) -> None:
+    """Test the default voice prompt is prepended to the user message."""
+    message = await _send_and_get_message(hass)
+
+    assert message == f"{DEFAULT_VOICE_PROMPT}\n\nHello"
+
+
+async def test_custom_voice_prompt_is_prepended(hass: HomeAssistant) -> None:
+    """Test a configured voice prompt replaces the default."""
+    message = await _send_and_get_message(
+        hass, {**TEST_CONFIG, CONF_VOICE_PROMPT: "短く話してください。"}
+    )
+
+    assert message == "短く話してください。\n\nHello"
+
+
+async def test_empty_voice_prompt_is_disabled(hass: HomeAssistant) -> None:
+    """Test an empty voice prompt sends the user message unchanged."""
+    message = await _send_and_get_message(hass, {**TEST_CONFIG, CONF_VOICE_PROMPT: ""})
+
+    assert message == "Hello"

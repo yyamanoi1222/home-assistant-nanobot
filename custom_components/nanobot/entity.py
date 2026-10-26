@@ -18,7 +18,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.intent import IntentResponse
 
-from .const import CONF_API_KEY, CONF_API_URL, CONF_MODEL, CONF_TIMEOUT, DOMAIN, LOGGER
+from .const import (
+    CONF_API_KEY,
+    CONF_API_URL,
+    CONF_MODEL,
+    CONF_TIMEOUT,
+    CONF_VOICE_PROMPT,
+    DEFAULT_VOICE_PROMPT,
+    DOMAIN,
+    LOGGER,
+)
 from .nanobot_client import NanobotClient, NanobotClientError
 
 _CONVERSATION_RESULT_FIELDS = {f.name for f in fields(ConversationResult)}
@@ -106,6 +115,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
         self._api_key = config.get(CONF_API_KEY)
         self._model = config.get(CONF_MODEL)
         self._timeout = config.get(CONF_TIMEOUT, 120)
+        self._voice_prompt = config.get(CONF_VOICE_PROMPT, DEFAULT_VOICE_PROMPT)
         self._last_response_text: str | None = None
 
         self._attr_unique_id = entry_id
@@ -201,9 +211,12 @@ class NanobotBaseConversationEntity(ConversationEntity):
         session_id: str,
     ) -> AsyncGenerator[AssistantContentDeltaDict, None]:
         """Translate nanobot SSE fragments into chat log deltas."""
+        voice_prompt = (self._voice_prompt or "").strip()
+        message = f"{voice_prompt}\n\n{text}" if voice_prompt else text
+
         first = True
         async for token in client.send_message_stream(
-            text=text,
+            text=message,
             session_id=session_id,
             model=self._model,
         ):

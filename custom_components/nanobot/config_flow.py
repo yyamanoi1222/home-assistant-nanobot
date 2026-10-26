@@ -6,28 +6,35 @@ from typing import Any
 
 import aiohttp
 import voluptuous as vol
-
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_API_KEY
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
 )
 
 from .const import (
     CONF_API_URL,
     CONF_MODEL,
     CONF_TIMEOUT,
+    CONF_VOICE_PROMPT,
     DEFAULT_API_URL,
     DEFAULT_TIMEOUT,
+    DEFAULT_VOICE_PROMPT,
     DOMAIN,
     LOGGER,
 )
 from .nanobot_client import (
-    NanobotAPIError,
     NanobotClient,
     NanobotClientError,
 )
@@ -44,6 +51,9 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
                 )
             ),
             vol.Coerce(int),
+        ),
+        vol.Optional(CONF_VOICE_PROMPT, default=DEFAULT_VOICE_PROMPT): TextSelector(
+            TextSelectorConfig(multiline=True)
         ),
     }
 )
@@ -72,9 +82,7 @@ class NanobotConfigFlow(ConfigFlow, domain=DOMAIN):
         """Handle the initial step."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            self._async_abort_entries_match(
-                {CONF_API_URL: user_input[CONF_API_URL]}
-            )
+            self._async_abort_entries_match({CONF_API_URL: user_input[CONF_API_URL]})
             try:
                 await _validate_input(self.hass, user_input)
             except aiohttp.ClientResponseError as err:
@@ -84,7 +92,7 @@ class NanobotConfigFlow(ConfigFlow, domain=DOMAIN):
                     errors["base"] = "cannot_connect"
             except (NanobotClientError, aiohttp.ClientError, TimeoutError):
                 errors["base"] = "cannot_connect"
-            except Exception:  # pylint: disable=broad-except
+            except Exception:  # noqa: BLE001
                 LOGGER.exception("Unexpected exception during nanobot config flow")
                 errors["base"] = "unknown"
             else:
@@ -95,4 +103,36 @@ class NanobotConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=STEP_USER_DATA_SCHEMA,
             errors=errors,
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> NanobotOptionsFlow:
+        """Return the options flow for this config entry."""
+        return NanobotOptionsFlow()
+
+
+class NanobotOptionsFlow(OptionsFlow):
+    """Handle options for nanobot."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage nanobot options."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        current_prompt = self.config_entry.options.get(
+            CONF_VOICE_PROMPT,
+            self.config_entry.data.get(CONF_VOICE_PROMPT, DEFAULT_VOICE_PROMPT),
+        )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_VOICE_PROMPT, default=current_prompt
+                    ): TextSelector(TextSelectorConfig(multiline=True)),
+                }
+            ),
         )
