@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import re
+from collections.abc import AsyncGenerator
 from dataclasses import fields
 
 from homeassistant.components.conversation import (
+    AssistantContent,
+    AssistantContentDeltaDict,
+    ChatLog,
     ConversationEntity,
     ConversationInput,
     ConversationResult,
@@ -53,6 +57,29 @@ def _make_result(
     return ConversationResult(response=response, conversation_id=conversation_id)
 
 
+def _make_speech_result(
+    language: str,
+    speech: str,
+    conversation_id: str | None,
+    continue_conversation: bool = False,
+) -> ConversationResult:
+    """Build a result that speaks a complete message."""
+    intent_response = IntentResponse(language=language)
+    intent_response.async_set_speech(speech)
+    return _make_result(intent_response, conversation_id, continue_conversation)
+
+
+def _last_assistant_content(chat_log: ChatLog) -> str | None:
+    """Return the text of the last assistant message in the chat log."""
+    if not chat_log.content:
+        return None
+
+    content = chat_log.content[-1]
+    if isinstance(content, AssistantContent) and content.content:
+        return content.content
+    return None
+
+
 class NanobotBaseConversationEntity(ConversationEntity):
     """Base nanobot conversation entity.
 
@@ -63,7 +90,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
     _attr_has_entity_name = True
     _attr_name = "nanobot"
     _attr_supported_features = 0
-    _attr_supports_streaming = False
+    _attr_supports_streaming = True
 
     def __init__(self, hass: HomeAssistant, entry_id: str, config: dict) -> None:
         """Initialize the nanobot conversation entity.
@@ -90,7 +117,11 @@ class NanobotBaseConversationEntity(ConversationEntity):
             "entry_type": "service",
         }
 
-    async def async_process(self, user_input: ConversationInput) -> ConversationResult:
+    async def _async_handle_message(
+        self,
+        user_input: ConversationInput,
+        chat_log: ChatLog,
+    ) -> ConversationResult:
         """Process a user message via nanobot.
 
         Home Assistant's Assist pipeline (especially voice) supplies a new
@@ -101,29 +132,23 @@ class NanobotBaseConversationEntity(ConversationEntity):
 
         nanobot's API requires exactly one user message per request; we
         always send only the latest user utterance and rely on session_id
-        for continuity. Successful replies keep the conversation open so
-        Assist listens for a follow-up. If speech-to-text echoes the previous
-        reply back, the input is dropped instead of being sent to nanobot
-        again.
+        for continuity. Reply tokens are streamed into the chat log so the
+        Assist pipeline can start TTS before the full answer is generated.
+        Successful replies keep the conversation open so Assist listens for a
+        follow-up. If speech-to-text echoes the previous reply back, the input
+        is dropped instead of being sent to nanobot again.
         """
         text = (user_input.text or "").strip()
         if not text:
-            intent_response = IntentResponse(language=user_input.language)
-            intent_response.async_set_speech("I didn't catch that.")
-            return _make_result(intent_response, None, False)
+            return _make_speech_result(
+                user_input.language, "I didn't catch that.", None, False
+            )
 
-        # Stabilize session_id for Assist pipelines that rotate conversation_id.
-        session_id = user_input.conversation_id
-        if not session_id:
-            session_id = user_input.device_id
-        if not session_id:
-            session_id = f"{DOMAIN}-{self._entry_id}"
+        session_id = self._resolve_session_id(user_input)
 
         if _looks_like_echo(text, self._last_response_text):
             LOGGER.debug("Ignoring possible echo of the previous reply: %s", text)
-            return _make_result(
-                IntentResponse(language=user_input.language), session_id, False
-            )
+            return _make_speech_result(user_input.language, "", session_id, False)
 
         session = async_get_clientsession(self.hass)
         client = NanobotClient(
@@ -134,18 +159,56 @@ class NanobotBaseConversationEntity(ConversationEntity):
         )
 
         try:
-            response_text = await client.send_message(
-                text=text,
-                session_id=session_id,
-                model=self._model,
-            )
+            async for _ in chat_log.async_add_delta_content_stream(
+                self.entity_id,
+                self._async_stream_reply(client, text, session_id),
+            ):
+                pass
         except NanobotClientError as err:
             LOGGER.error("nanobot conversation error: %s", err)
-            intent_response = IntentResponse(language=user_input.language)
-            intent_response.async_set_speech("Sorry, I could not reach nanobot.")
-            return _make_result(intent_response, session_id, False)
+            return _make_speech_result(
+                user_input.language,
+                "Sorry, I could not reach nanobot.",
+                session_id,
+                False,
+            )
 
-        intent_response = IntentResponse(language=user_input.language)
-        intent_response.async_set_speech(response_text)
+        response_text = _last_assistant_content(chat_log)
+        if not response_text:
+            LOGGER.error("nanobot returned an empty reply")
+            return _make_speech_result(
+                user_input.language,
+                "Sorry, I could not reach nanobot.",
+                session_id,
+                False,
+            )
+
         self._last_response_text = response_text
-        return _make_result(intent_response, session_id, True)
+        return _make_speech_result(user_input.language, response_text, session_id, True)
+
+    def _resolve_session_id(self, user_input: ConversationInput) -> str:
+        """Return the nanobot session ID for a conversation turn."""
+        return (
+            user_input.conversation_id
+            or user_input.device_id
+            or f"{DOMAIN}-{self._entry_id}"
+        )
+
+    async def _async_stream_reply(
+        self,
+        client: NanobotClient,
+        text: str,
+        session_id: str,
+    ) -> AsyncGenerator[AssistantContentDeltaDict, None]:
+        """Translate nanobot SSE fragments into chat log deltas."""
+        first = True
+        async for token in client.send_message_stream(
+            text=text,
+            session_id=session_id,
+            model=self._model,
+        ):
+            if first:
+                yield {"role": "assistant", "content": token}
+                first = False
+            else:
+                yield {"content": token}

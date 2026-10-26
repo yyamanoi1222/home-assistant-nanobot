@@ -12,6 +12,22 @@ from custom_components.nanobot.nanobot_client import (
 )
 
 
+class _SseContent:
+    """Async iterator over SSE lines."""
+
+    def __init__(self, lines: list[bytes]) -> None:
+        self._lines = iter(lines)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> bytes:
+        try:
+            return next(self._lines)
+        except StopIteration as err:
+            raise StopAsyncIteration from err
+
+
 async def test_validate_connection_success() -> None:
     """Test successful health check."""
     session = MagicMock(spec=aiohttp.ClientSession)
@@ -54,9 +70,7 @@ async def test_send_message_success() -> None:
         return_value={
             "id": "chatcmpl-test",
             "object": "chat.completion",
-            "choices": [
-                {"message": {"role": "assistant", "content": "Hello, world!"}}
-            ],
+            "choices": [{"message": {"role": "assistant", "content": "Hello, world!"}}],
         }
     )
     cm = AsyncMock()
@@ -166,3 +180,111 @@ async def test_send_message_invalid_response() -> None:
     client = NanobotClient(session=session, api_url="http://127.0.0.1:8900")
     with pytest.raises(NanobotAPIError):
         await client.send_message("Hi")
+
+
+def _streaming_response(lines: list[bytes]) -> MagicMock:
+    """Build a mocked streaming aiohttp response."""
+    response = MagicMock(spec=aiohttp.ClientResponse)
+    response.ok = True
+    response.status = 200
+    response.content = _SseContent(lines)
+    return response
+
+
+async def _collect_stream(client: NanobotClient, text: str, **kwargs) -> list[str]:
+    return [chunk async for chunk in client.send_message_stream(text, **kwargs)]
+
+
+async def test_send_message_stream_success() -> None:
+    """Test streaming assistant content from SSE events."""
+    session = MagicMock(spec=aiohttp.ClientSession)
+    response = _streaming_response(
+        [
+            b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n',
+            b"\n",
+            b'data: {"choices":[{"delta":{"content":"Hello"}}]}\n',
+            b'data: {"choices":[{"delta":{"content":", world!"}}]}\n',
+            b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n',
+            b"data: [DONE]\n",
+        ]
+    )
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    session.post.return_value = cm
+
+    client = NanobotClient(session=session, api_url="http://127.0.0.1:8900")
+    chunks = await _collect_stream(client, "Hi", session_id="test-session")
+
+    assert chunks == ["Hello", ", world!"]
+    call_kwargs = session.post.call_args.kwargs
+    assert call_kwargs["json"]["messages"] == [{"role": "user", "content": "Hi"}]
+    assert call_kwargs["json"]["session_id"] == "test-session"
+    assert call_kwargs["json"]["stream"] is True
+    assert call_kwargs["headers"]["Accept"] == "text/event-stream"
+
+
+async def test_send_message_stream_with_model() -> None:
+    """Test the model is forwarded on streaming requests."""
+    session = MagicMock(spec=aiohttp.ClientSession)
+    response = _streaming_response([b"data: [DONE]\n"])
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    session.post.return_value = cm
+
+    client = NanobotClient(session=session, api_url="http://127.0.0.1:8900")
+    chunks = await _collect_stream(client, "Hi", model="MiniMax-M2.7")
+
+    assert chunks == []
+    assert session.post.call_args.kwargs["json"]["model"] == "MiniMax-M2.7"
+
+
+async def test_send_message_stream_api_error() -> None:
+    """Test a non-2xx streaming response raises an API error."""
+    session = MagicMock(spec=aiohttp.ClientSession)
+    response = MagicMock(spec=aiohttp.ClientResponse)
+    response.ok = False
+    response.status = 500
+    response.text = AsyncMock(return_value='{"error": {"message": "boom"}}')
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    session.post.return_value = cm
+
+    client = NanobotClient(session=session, api_url="http://127.0.0.1:8900")
+    with pytest.raises(NanobotAPIError, match="boom"):
+        await _collect_stream(client, "Hi")
+
+
+async def test_send_message_stream_malformed_event() -> None:
+    """Test malformed SSE JSON raises an API error."""
+    session = MagicMock(spec=aiohttp.ClientSession)
+    response = _streaming_response([b"data: {not-json}\n"])
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    session.post.return_value = cm
+
+    client = NanobotClient(session=session, api_url="http://127.0.0.1:8900")
+    with pytest.raises(NanobotAPIError):
+        await _collect_stream(client, "Hi")
+
+
+async def test_send_message_stream_connection_error() -> None:
+    """Test connection errors while streaming."""
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.post.side_effect = aiohttp.ClientError("Connection refused")
+
+    client = NanobotClient(session=session, api_url="http://127.0.0.1:8900")
+    with pytest.raises(NanobotConnectionError):
+        await _collect_stream(client, "Hi")
+
+
+async def test_send_message_stream_empty_text() -> None:
+    """Test that empty text is rejected before making a request."""
+    session = MagicMock(spec=aiohttp.ClientSession)
+
+    client = NanobotClient(session=session, api_url="http://127.0.0.1:8900")
+    with pytest.raises(ValueError):
+        await _collect_stream(client, "   ")

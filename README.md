@@ -7,6 +7,7 @@ This custom component exposes nanobot's OpenAI-compatible chat API as a [Home As
 ## Features
 
 - Text-only chat via nanobot's `/v1/chat/completions` endpoint
+- Streaming replies over SSE, so Assist can start speaking before the full answer is generated
 - Conversation history handled by nanobot using `session_id`
 - Optional model selection
 - Optional API key for LAN / remote nanobot instances
@@ -49,10 +50,12 @@ service: conversation.process
 
 ## Requirements
 
-- Home Assistant 2024.12.0 or newer
+- Home Assistant 2025.7.0 or newer
 - A running [nanobot](https://github.com/HKUDS/nanobot) instance with the OpenAI-compatible API enabled
 
 ## Notes
 
 - nanobot accepts exactly one user message per request. This integration always sends only the latest utterance and uses the conversation `session_id` for continuity.
 - Device control through Home Assistant is not supported because nanobot's OpenAI-compatible endpoint does not expose tool/function calling to external clients.
+- Streaming TTS requires a TTS engine that implements `async_stream_tts_audio` (for example, Microsoft Edge TTS). Assist only starts streaming after roughly 60 characters, so short replies still wait for the full answer.
+- nanobot emits every generation segment on its SSE stream, including text produced before a tool call. The OpenAI-compatible protocol has no segment delimiter, so such intermediate text may also be spoken.

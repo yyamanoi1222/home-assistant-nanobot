@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import json
+from collections.abc import AsyncGenerator, Mapping
 from typing import Any
 
 import aiohttp
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import LOGGER
+
+_SSE_DONE = object()
 
 
 class NanobotClientError(HomeAssistantError):
@@ -151,17 +154,151 @@ class NanobotClient:
             ) as response:
                 body = await response.json(content_type=None)
                 if not response.ok:
-                    error_text = body.get("error", {}).get("message", await response.text()) if isinstance(body, dict) else await response.text()
+                    error_text = (
+                        body.get("error", {}).get("message", await response.text())
+                        if isinstance(body, dict)
+                        else await response.text()
+                    )
                     raise NanobotAPIError(
                         f"nanobot API error ({response.status}): {error_text}",
                         status=response.status,
                     )
         except aiohttp.ClientError as err:
-            raise NanobotConnectionError(f"Error communicating with nanobot: {err}") from err
+            raise NanobotConnectionError(
+                f"Error communicating with nanobot: {err}"
+            ) from err
         except TimeoutError as err:
             raise NanobotConnectionError("Request to nanobot timed out") from err
 
         return self._extract_response_text(body)
+
+    async def send_message_stream(
+        self,
+        text: str,
+        session_id: str | None = None,
+        model: str | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """Send a user message and yield assistant reply tokens as they arrive.
+
+        nanobot's streaming endpoint emits OpenAI-compatible server-sent events
+        with ``choices[0].delta.content`` fragments. The stream ends with a
+        ``data: [DONE]`` sentinel.
+
+        Args:
+            text: The user utterance to send.
+            session_id: Optional session identifier for conversation continuity.
+            model: Optional model name.
+
+        Yields:
+            Non-empty assistant content fragments in arrival order.
+
+        Raises:
+            NanobotConnectionError: If the request fails due to network issues.
+            NanobotAPIError: If the API returns an error or an invalid event.
+            ValueError: If ``text`` is empty or contains only whitespace.
+        """
+        stripped_text = (text or "").strip()
+        if not stripped_text:
+            raise ValueError("text must not be empty")
+
+        url = f"{self._api_url}/v1/chat/completions"
+        payload: dict[str, Any] = {
+            "messages": [{"role": "user", "content": stripped_text}],
+            "stream": True,
+        }
+        if session_id is not None:
+            payload["session_id"] = session_id
+        if model is not None:
+            payload["model"] = model
+
+        LOGGER.debug(
+            "Streaming request to nanobot (%s): %s",
+            url,
+            {**payload, "messages": "<redacted>"},
+        )
+
+        headers = {**self._headers(), "Accept": "text/event-stream"}
+        try:
+            async with self._session.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=self._timeout,
+            ) as response:
+                if not response.ok:
+                    error_text = await self._extract_error_text(response)
+                    raise NanobotAPIError(
+                        f"nanobot API error ({response.status}): {error_text}",
+                        status=response.status,
+                    )
+
+                async for raw_line in response.content:
+                    content = self._parse_sse_line(raw_line)
+                    if content is None:
+                        continue
+                    if content is _SSE_DONE:
+                        break
+                    yield content
+        except aiohttp.ClientError as err:
+            raise NanobotConnectionError(
+                f"Error communicating with nanobot: {err}"
+            ) from err
+        except TimeoutError as err:
+            raise NanobotConnectionError("Request to nanobot timed out") from err
+
+    @staticmethod
+    async def _extract_error_text(response: aiohttp.ClientResponse) -> str:
+        """Return a readable error message for a non-2xx streaming response."""
+        text = await response.text()
+        try:
+            body = json.loads(text)
+        except ValueError:
+            return text
+        if isinstance(body, dict):
+            error = body.get("error")
+            if isinstance(error, dict):
+                message = error.get("message")
+                if message:
+                    return str(message)
+        return text
+
+    @staticmethod
+    def _parse_sse_line(raw_line: bytes) -> str | None | object:
+        """Extract an assistant content fragment from one SSE line."""
+        line = raw_line.strip()
+        if not line or not line.startswith(b"data:"):
+            return None
+
+        data = line[len(b"data:") :].strip()
+        if data == b"[DONE]":
+            return _SSE_DONE
+
+        try:
+            chunk = json.loads(data)
+        except ValueError as err:
+            raise NanobotAPIError(
+                "Invalid streaming response from nanobot: malformed JSON"
+            ) from err
+
+        if not isinstance(chunk, dict):
+            raise NanobotAPIError(
+                "Invalid streaming response from nanobot: expected JSON object"
+            )
+
+        choices = chunk.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return None
+
+        first_choice = choices[0]
+        delta = first_choice.get("delta") if isinstance(first_choice, dict) else None
+        if not isinstance(delta, dict):
+            return None
+
+        content = delta.get("content")
+        if not content:
+            return None
+
+        return str(content)
 
     @staticmethod
     def _extract_response_text(body: Any) -> str:
