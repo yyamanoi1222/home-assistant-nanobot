@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from typing import Any
 
 from aiohttp.test_utils import TestClient, TestServer
-
 from nanobot_voice_gateway.app import MANAGER_KEY, create_app
 from nanobot_voice_gateway.config import GatewayConfig
 

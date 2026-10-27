@@ -254,8 +254,26 @@ class NanobotBaseConversationEntity(ConversationEntity):
         inject_prompt = bool(voice_prompt) and session_id not in self._prompted_sessions
         message = f"{voice_prompt}\n\n{text}" if inject_prompt else text
 
+        if inject_prompt:
+            LOGGER.debug(
+                "Applying voice prompt to session %s: %s", session_id, voice_prompt
+            )
+        elif voice_prompt:
+            LOGGER.debug(
+                "Voice prompt already sent for session %s; not applying it again",
+                session_id,
+            )
+        else:
+            LOGGER.debug("Voice prompt disabled for session %s", session_id)
+
         queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
-        stream = self._async_voice_token_stream(client, message, session_id, user_input)
+        stream = self._async_voice_token_stream(
+            client,
+            message,
+            session_id,
+            user_input,
+            inject_prompt=inject_prompt,
+        )
         producer = asyncio.create_task(self._async_pump_stream(stream, queue))
 
         first = True
@@ -283,10 +301,6 @@ class NanobotBaseConversationEntity(ConversationEntity):
                 token = cast(str, value)
                 received_token = True
 
-                if inject_prompt:
-                    self._prompted_sessions.add(session_id)
-                    inject_prompt = False
-
                 if first:
                     yield {"role": "assistant", "content": token}
                     first = False
@@ -308,6 +322,8 @@ class NanobotBaseConversationEntity(ConversationEntity):
         text: str,
         session_id: str,
         user_input: ConversationInput,
+        *,
+        inject_prompt: bool = False,
     ) -> AsyncGenerator[str, None]:
         """Yield speakable text from the voice gateway event stream."""
         turn_id = uuid4().hex
@@ -348,10 +364,21 @@ class NanobotBaseConversationEntity(ConversationEntity):
                     continue
 
                 if event_type == "turn.completed":
+                    if inject_prompt:
+                        self._prompted_sessions.add(session_id)
+                        LOGGER.debug(
+                            "Voice prompt sent successfully for session %s",
+                            session_id,
+                        )
                     completed = True
                     return
 
                 if event_type == "turn.cancelled":
+                    LOGGER.debug(
+                        "Turn for session %s was cancelled; voice prompt will be "
+                        "reapplied on the next turn",
+                        session_id,
+                    )
                     completed = True
                     return
 

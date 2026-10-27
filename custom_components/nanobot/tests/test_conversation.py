@@ -103,6 +103,26 @@ class _RecordingStream:
         yield {"type": "turn.completed", "content": self.text}
 
 
+class _FirstTurnCancelledStream:
+    """Cancel the first turn and complete subsequent turns."""
+
+    def __init__(self, text: str = "OK") -> None:
+        self.text = text
+        self.calls: list[dict] = []
+
+    def __call__(self, *args, **kwargs):
+        self.calls.append(kwargs)
+        return self._stream(cancel=len(self.calls) == 1)
+
+    async def _stream(self, *, cancel: bool):
+        yield {"type": "turn.started"}
+        yield {"type": "segment", "text": self.text, "final": True}
+        if cancel:
+            yield {"type": "turn.cancelled"}
+        else:
+            yield {"type": "turn.completed", "content": self.text}
+
+
 def _make_entity(hass: HomeAssistant, config: dict | None = None):
     from custom_components.nanobot.conversation import NanobotConversationEntity
 
@@ -448,6 +468,30 @@ async def test_voice_prompt_only_on_first_turn(hass: HomeAssistant) -> None:
 
     assert stream.calls[0]["text"] == f"{DEFAULT_VOICE_PROMPT}\n\nHello"
     assert stream.calls[1]["text"] == "Again"
+
+
+async def test_voice_prompt_reapplied_after_cancelled_first_turn(
+    hass: HomeAssistant,
+) -> None:
+    """Test a cancelled first turn does not mark the prompt as sent."""
+    entity = _make_entity(hass)
+    stream = _FirstTurnCancelledStream()
+
+    with (
+        patch(
+            "custom_components.nanobot.entity.async_get_clientsession",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
+            new=stream,
+        ),
+    ):
+        await _process(entity, _make_input("Hello", conversation_id="same"))
+        await _process(entity, _make_input("Again", conversation_id="same"))
+
+    assert stream.calls[0]["text"] == f"{DEFAULT_VOICE_PROMPT}\n\nHello"
+    assert stream.calls[1]["text"] == f"{DEFAULT_VOICE_PROMPT}\n\nAgain"
 
 
 async def test_voice_prompt_reapplied_for_new_session(hass: HomeAssistant) -> None:

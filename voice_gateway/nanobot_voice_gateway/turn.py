@@ -164,6 +164,13 @@ class TurnRunner:
             return
 
         self.state = TurnState.RUNNING
+        LOGGER.debug(
+            "Turn %s request: session=%s text_chars=%d text_prefix=%r",
+            self.request.turn_id,
+            self.request.session_key,
+            len(self.request.text),
+            self.request.text[:500],
+        )
         self._emit(
             "turn.started",
             model=self.request.model or self.config.model_preset,
