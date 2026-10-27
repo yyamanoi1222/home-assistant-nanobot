@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
@@ -22,7 +23,7 @@ class FakeSessions:
     def clear(self, session_key: str) -> None:
         self.calls.append(("clear", session_key))
 
-    async def restore(self, snapshot: Any, session_key: str) -> None:
+    async def restore(self, snapshot: Any, *, session_key: str | None = None) -> None:
         self.calls.append(("restore", session_key, snapshot))
 
 
@@ -127,6 +128,36 @@ async def test_completed_turn_emits_final_segment() -> None:
     assert runner.state is TurnState.COMPLETED
     assert ("export", "s1") in bot.sessions.calls
     assert not any(call[0] == "clear" for call in bot.sessions.calls)
+
+
+async def test_completed_turn_serializes_usage_object() -> None:
+    @dataclass
+    class FakeUsage:
+        input_tokens: int = 10
+        output_tokens: int = 5
+
+    result = SimpleNamespace(
+        content="こんにちは。",
+        tools_used=[],
+        usage=FakeUsage(),
+        stop_reason="completed",
+    )
+    run = FakeRun(
+        [
+            SimpleNamespace(type="text.delta", delta="こんにちは。"),
+            SimpleNamespace(type="text.completed", resuming=False),
+            SimpleNamespace(type="run.completed", result=result),
+        ],
+        result,
+    )
+    bot = FakeBot(run)
+    runner = TurnRunner(bot=bot, config=GatewayConfig(), request=_request())
+
+    await runner.run()
+    events = await _drain(runner)
+
+    completed = next(event for event in events if event["type"] == "turn.completed")
+    assert completed["usage"] == {"input_tokens": 10, "output_tokens": 5}
 
 
 async def test_cancel_stops_run_and_rolls_back() -> None:

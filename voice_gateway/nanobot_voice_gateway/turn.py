@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from enum import Enum
 from typing import Any
 
@@ -243,7 +243,7 @@ class TurnRunner:
             "turn.completed",
             content=getattr(result, "content", "") or "",
             tools_used=list(getattr(result, "tools_used", []) or []),
-            usage=dict(getattr(result, "usage", {}) or {}),
+            usage=_usage_payload(getattr(result, "usage", None)),
             stop_reason=getattr(result, "stop_reason", None),
         )
 
@@ -449,6 +449,16 @@ class TurnRunner:
         self._emit(event_type, **payload)
         self._closed = True
         self.queue.put_nowait(None)
+
+
+def _usage_payload(usage: Any) -> dict[str, Any]:
+    if usage is None:
+        return {}
+    if is_dataclass(usage):
+        return asdict(usage)
+    if isinstance(usage, dict):
+        return dict(usage)
+    return {}
 
 
 def _error_code(err: Exception) -> str:

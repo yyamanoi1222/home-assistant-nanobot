@@ -28,4 +28,4 @@ async def rollback_session(bot: Any, session_key: str, snapshot: Any) -> None:
 
     await _maybe_await(sessions.clear(session_key))
     if snapshot is not None:
-        await _maybe_await(sessions.restore(snapshot, session_key))
+        await _maybe_await(sessions.restore(snapshot, session_key=session_key))
