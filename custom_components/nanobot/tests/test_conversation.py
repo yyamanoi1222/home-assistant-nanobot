@@ -8,14 +8,12 @@ from homeassistant.components.conversation import (
     ChatLog,
     ConversationInput,
     ConversationResult,
-    ToolResultContent,
     UserContent,
 )
 from homeassistant.const import CONF_API_KEY
 from homeassistant.core import HomeAssistant
 
 from custom_components.nanobot.const import (
-    ACTIVITY_TOOL_NAME,
     CONF_API_URL,
     CONF_MODEL,
     CONF_TIMEOUT,
@@ -467,10 +465,10 @@ async def test_conversation_entity_ignores_partial_echo(
     assert second.continue_conversation is False
 
 
-async def test_fast_reply_does_not_emit_activity_tool_call(
+async def test_fast_reply_does_not_emit_tool_call(
     hass: HomeAssistant,
 ) -> None:
-    """Test a fast reply does not add synthetic tool calls."""
+    """Test a fast reply is emitted without synthetic tool calls."""
     entity = _make_entity(hass)
     user_input = _make_input("Hello", conversation_id="test-conversation")
 
@@ -487,19 +485,15 @@ async def test_fast_reply_does_not_emit_activity_tool_call(
         result, chat_log = await _process_with_chat_log(entity, user_input)
 
     assistant = [
-        content
-        for content in chat_log.content
-        if isinstance(content, AssistantContent)
+        content for content in chat_log.content if isinstance(content, AssistantContent)
     ]
     assert len(assistant) == 1
     assert assistant[0].tool_calls is None
     assert result.response.speech["plain"]["speech"] == "Hi there!"
 
 
-async def test_silence_after_text_emits_activity_tool_call(
-    hass: HomeAssistant,
-) -> None:
-    """Test silence after streamed text triggers a synthetic tool call."""
+async def test_slow_stream_is_not_cut_off(hass: HomeAssistant) -> None:
+    """Test a pause after streamed text does not end the reply."""
     entity = _make_entity(hass)
     user_input = _make_input("天気は?", conversation_id="test-conversation")
 
@@ -517,43 +511,29 @@ async def test_silence_after_text_emits_activity_tool_call(
             "custom_components.nanobot.entity.NanobotClient.send_message_stream",
             new=_slow_stream,
         ),
-        patch("custom_components.nanobot.entity.STREAM_IDLE_TIMEOUT", 0.01),
     ):
         result, chat_log = await _process_with_chat_log(entity, user_input)
 
     assistant = [
-        content
-        for content in chat_log.content
-        if isinstance(content, AssistantContent)
-    ]
-    tool_results = [
-        content
-        for content in chat_log.content
-        if isinstance(content, ToolResultContent)
+        content for content in chat_log.content if isinstance(content, AssistantContent)
     ]
 
     assert [content.content for content in assistant] == [
-        "Webで調べますね。",
-        "晴れです。",
+        "Webで調べますね。晴れです。",
     ]
-    assert assistant[0].tool_calls is not None
-    assert assistant[0].tool_calls[0].tool_name == ACTIVITY_TOOL_NAME
-    assert assistant[0].tool_calls[0].external is True
-    assert len(tool_results) == 1
-    assert tool_results[0].tool_name == ACTIVITY_TOOL_NAME
-    assert result.response.speech["plain"]["speech"] == "Webで調べますね。 晴れです。"
+    assert all(content.tool_calls is None for content in assistant)
+    assert result.response.speech["plain"]["speech"] == "Webで調べますね。晴れです。"
 
 
-async def test_silence_before_text_does_not_emit_tool_call(
-    hass: HomeAssistant,
-) -> None:
-    """Test silence before any text waits for the model instead of faking a tool."""
+async def test_first_token_timeout_returns_error(hass: HomeAssistant) -> None:
+    """Test a stream that never starts responding is reported as an error."""
     entity = _make_entity(hass)
-    user_input = _make_input("天気は?", conversation_id="test-conversation")
+    entity._timeout = 0.01
+    user_input = _make_input("Hello", conversation_id="test-conversation")
 
     async def _slow_stream(*args, **kwargs):
         await asyncio.sleep(0.05)
-        yield "晴れです。"
+        yield "too late"
 
     with (
         patch(
@@ -564,25 +544,10 @@ async def test_silence_before_text_does_not_emit_tool_call(
             "custom_components.nanobot.entity.NanobotClient.send_message_stream",
             new=_slow_stream,
         ),
-        patch("custom_components.nanobot.entity.STREAM_IDLE_TIMEOUT", 0.01),
     ):
-        result, chat_log = await _process_with_chat_log(entity, user_input)
+        result = await _process(entity, user_input)
 
-    assistant = [
-        content
-        for content in chat_log.content
-        if isinstance(content, AssistantContent)
-    ]
-    tool_results = [
-        content
-        for content in chat_log.content
-        if isinstance(content, ToolResultContent)
-    ]
-
-    assert [content.content for content in assistant] == ["晴れです。"]
-    assert assistant[0].tool_calls is None
-    assert tool_results == []
-    assert result.response.speech["plain"]["speech"] == "晴れです。"
+    assert "could not reach nanobot" in result.response.speech["plain"]["speech"]
 
 
 async def test_empty_stream_returns_error(hass: HomeAssistant) -> None:

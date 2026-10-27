@@ -7,7 +7,7 @@ import contextlib
 import re
 from collections.abc import AsyncGenerator
 from dataclasses import fields
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from homeassistant.components.conversation import (
     AssistantContent,
@@ -16,15 +16,12 @@ from homeassistant.components.conversation import (
     ConversationEntity,
     ConversationInput,
     ConversationResult,
-    ToolResultContent,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import llm
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.intent import IntentResponse
 
 from .const import (
-    ACTIVITY_TOOL_NAME,
     CONF_API_KEY,
     CONF_API_URL,
     CONF_MODEL,
@@ -33,18 +30,15 @@ from .const import (
     DEFAULT_VOICE_PROMPT,
     DOMAIN,
     LOGGER,
-    STREAM_IDLE_TIMEOUT,
 )
-from .nanobot_client import NanobotAPIError, NanobotClient, NanobotClientError
-
-if TYPE_CHECKING:
-    from homeassistant.components.conversation import ToolResultContentDeltaDict
+from .nanobot_client import (
+    NanobotAPIError,
+    NanobotClient,
+    NanobotClientError,
+    NanobotConnectionError,
+)
 
 _CONVERSATION_RESULT_FIELDS = {f.name for f in fields(ConversationResult)}
-_TOOL_INPUT_FIELDS = {f.name for f in fields(llm.ToolInput)}
-_TOOL_RESULT_FIELDS = {f.name for f in fields(ToolResultContent)}
-_SUPPORTS_EXTERNAL_TOOL_CALLS = "external" in _TOOL_INPUT_FIELDS
-_TOOL_RESULT_USES_RESULT = "result" in _TOOL_RESULT_FIELDS
 _ECHO_MIN_LENGTH = 8
 _NON_WORD_RE = re.compile(r"[\W_]+", re.UNICODE)
 
@@ -104,31 +98,6 @@ def _turn_assistant_text(chat_log: ChatLog, start_index: int) -> str | None:
     return " ".join(texts)
 
 
-def _make_activity_tool_call() -> llm.ToolInput:
-    """Build the synthetic tool call used to start TTS during a silent wait."""
-    return llm.ToolInput(
-        tool_name=ACTIVITY_TOOL_NAME,
-        tool_args={},
-        external=True,
-    )
-
-
-def _make_tool_result_delta(
-    tool_call: llm.ToolInput,
-) -> ToolResultContentDeltaDict:
-    """Build a tool result delta that closes the synthetic tool call."""
-    delta: dict[str, Any] = {
-        "role": "tool_result",
-        "tool_call_id": tool_call.id,
-        "tool_name": tool_call.tool_name,
-    }
-    if _TOOL_RESULT_USES_RESULT:
-        delta["result"] = llm.ToolResult(data={"status": "completed"})
-    else:
-        delta["tool_result"] = {"status": "completed"}
-    return delta
-
-
 class NanobotBaseConversationEntity(ConversationEntity):
     """Base nanobot conversation entity.
 
@@ -186,12 +155,10 @@ class NanobotBaseConversationEntity(ConversationEntity):
         for continuity. The configured voice prompt is prepended to the first
         request of each session. Reply tokens are streamed into the chat log
         so the Assist pipeline can start TTS before the full answer is
-        generated. When nanobot goes silent for a while, a synthetic external
-        tool call is emitted so Home Assistant starts speaking the buffered
-        text instead of waiting for the 60 character streaming threshold.
-        Successful replies keep the conversation open so Assist listens for a
-        follow-up. If speech-to-text echoes part of the previous reply back,
-        the input is dropped instead of being sent to nanobot again.
+        generated. Successful replies keep the conversation open so Assist
+        listens for a follow-up. If speech-to-text echoes part of the previous
+        reply back, the input is dropped instead of being sent to nanobot
+        again.
         """
         text = (user_input.text or "").strip()
         if not text:
@@ -271,13 +238,12 @@ class NanobotBaseConversationEntity(ConversationEntity):
         client: NanobotClient,
         text: str,
         session_id: str,
-    ) -> AsyncGenerator[AssistantContentDeltaDict | ToolResultContentDeltaDict, None]:
+    ) -> AsyncGenerator[AssistantContentDeltaDict, None]:
         """Translate nanobot SSE fragments into chat log deltas.
 
-        A silence longer than ``STREAM_IDLE_TIMEOUT`` after the first token is
-        treated as a likely tool execution. We then emit a synthetic external
-        tool call, which makes the Assist pipeline start TTS immediately so
-        buffered text is spoken while nanobot is busy.
+        The response start is bounded by the configured timeout. Once nanobot
+        starts streaming, no additional timeout is applied: long tool calls and
+        pauses must not cut the reply off.
         """
         voice_prompt = (self._voice_prompt or "").strip()
         inject_prompt = bool(voice_prompt) and session_id not in self._prompted_sessions
@@ -293,31 +259,24 @@ class NanobotBaseConversationEntity(ConversationEntity):
 
         first = True
         received_token = False
-        tool_call: llm.ToolInput | None = None
-        timeout_disabled = False
 
         try:
             while True:
-                if tool_call is not None or timeout_disabled or first:
-                    kind, value = await queue.get()
-                else:
+                if first:
                     try:
                         kind, value = await asyncio.wait_for(
-                            queue.get(), timeout=STREAM_IDLE_TIMEOUT
+                            queue.get(), timeout=self._timeout
                         )
-                    except TimeoutError:
-                        if _SUPPORTS_EXTERNAL_TOOL_CALLS:
-                            tool_call = _make_activity_tool_call()
-                            yield {"tool_calls": [tool_call]}
-                        else:
-                            timeout_disabled = True
-                        continue
+                    except TimeoutError as err:
+                        raise NanobotConnectionError(
+                            "Timeout waiting for nanobot to start responding"
+                        ) from err
+                else:
+                    kind, value = await queue.get()
 
                 if kind == "error":
                     raise value
                 if kind == "done":
-                    if tool_call is not None:
-                        yield _make_tool_result_delta(tool_call)
                     break
 
                 token = cast(str, value)
@@ -327,12 +286,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
                     self._prompted_sessions.add(session_id)
                     inject_prompt = False
 
-                if tool_call is not None:
-                    yield _make_tool_result_delta(tool_call)
-                    tool_call = None
-                    yield {"role": "assistant", "content": token}
-                    first = False
-                elif first:
+                if first:
                     yield {"role": "assistant", "content": token}
                     first = False
                 else:

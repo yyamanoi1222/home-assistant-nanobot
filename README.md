@@ -36,7 +36,7 @@ This custom component exposes nanobot's OpenAI-compatible chat API as a [Home As
 3. Enter your nanobot API URL (default: `http://127.0.0.1:8900`).
 4. Fill in the API key only if nanobot is bound to `0.0.0.0` or a remote interface.
 5. Optionally enter a model name returned by `GET /v1/models`.
-6. Adjust the request timeout if needed.
+6. Adjust the response start timeout if needed. It bounds the initial connection and the wait for the first token; long tool calls are not cut off by the HA-side timeout.
 7. Optionally edit the voice response prompt, which keeps spoken replies short and free of formatting. Leave it empty to disable.
 
 ## Usage
@@ -59,6 +59,7 @@ service: conversation.process
 
 - nanobot accepts exactly one user message per request. This integration always sends only the latest utterance and uses the conversation `session_id` for continuity.
 - Device control through Home Assistant is not supported because nanobot's OpenAI-compatible endpoint does not expose tool/function calling to external clients.
-- Streaming TTS requires a TTS engine that implements `async_stream_tts_audio` (for example, Microsoft Edge TTS). Assist only starts streaming after roughly 60 characters, so short final replies still wait for the full answer. When nanobot pauses after a pre-tool message, the integration emits a synthetic external tool call to start TTS early.
-- nanobot emits every generation segment on its SSE stream, including text produced before a tool call. The default voice prompt asks the model to announce the tool before using it, so that announcement is spoken while the tool runs.
+- Streaming TTS requires a TTS engine that implements `async_stream_tts_audio` (for example, Microsoft Edge TTS). Assist only starts streaming after roughly 60 characters, so short replies still wait for the full answer.
+- nanobot emits every generation segment on its SSE stream, including text produced before a tool call. The OpenAI-compatible protocol has no segment delimiter, so such intermediate text may also be spoken.
+- nanobot's API server applies its own per-request timeout that covers tool execution (default 120 seconds). If tools can run longer, start the server with `nanobot serve --timeout 600` or raise `api.timeout` in the nanobot configuration.
 - The voice response prompt is prepended to the first request of each HA session and is therefore stored in nanobot's session history. Other nanobot channels such as Discord are unaffected.

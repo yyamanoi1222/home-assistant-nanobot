@@ -54,6 +54,14 @@ class NanobotClient:
         self._api_url = api_url.rstrip("/")
         self._api_key = api_key
         self._timeout = aiohttp.ClientTimeout(total=timeout)
+        # Server-sent event responses can stay silent for a long time while
+        # nanobot runs a tool. A total or read timeout would close the
+        # connection mid-turn, so only cap the connection attempt here.
+        self._stream_timeout = aiohttp.ClientTimeout(
+            total=None,
+            sock_connect=timeout,
+            sock_read=None,
+        )
 
     @property
     def api_url(self) -> str:
@@ -223,7 +231,7 @@ class NanobotClient:
                 url,
                 headers=headers,
                 json=payload,
-                timeout=self._timeout,
+                timeout=self._stream_timeout,
             ) as response:
                 if not response.ok:
                     error_text = await self._extract_error_text(response)

@@ -288,3 +288,23 @@ async def test_send_message_stream_empty_text() -> None:
     client = NanobotClient(session=session, api_url="http://127.0.0.1:8900")
     with pytest.raises(ValueError):
         await _collect_stream(client, "   ")
+
+
+async def test_send_message_stream_has_no_total_timeout() -> None:
+    """Test streaming is not capped by a total or read timeout."""
+    session = MagicMock(spec=aiohttp.ClientSession)
+    response = _streaming_response([b"data: [DONE]\n"])
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    session.post.return_value = cm
+
+    client = NanobotClient(
+        session=session, api_url="http://127.0.0.1:8900", timeout=123
+    )
+    await _collect_stream(client, "Hi")
+
+    timeout = session.post.call_args.kwargs["timeout"]
+    assert timeout.total is None
+    assert timeout.sock_read is None
+    assert timeout.sock_connect == 123
