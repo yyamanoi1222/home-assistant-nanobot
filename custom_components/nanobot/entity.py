@@ -17,10 +17,12 @@ from homeassistant.components.conversation import (
     ConversationEntity,
     ConversationInput,
     ConversationResult,
+    ToolResultContentDeltaDict,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.intent import IntentResponse
+from homeassistant.helpers.llm import ToolInput, ToolResult
 
 from .const import (
     CONF_API_KEY,
@@ -44,6 +46,8 @@ from .nanobot_client import (
 _CONVERSATION_RESULT_FIELDS = {f.name for f in fields(ConversationResult)}
 _ECHO_MIN_LENGTH = 8
 _NON_WORD_RE = re.compile(r"[\W_]+", re.UNICODE)
+
+type VoiceDelta = AssistantContentDeltaDict | ToolResultContentDeltaDict
 
 
 def _normalize_for_echo(text: str) -> str:
@@ -223,13 +227,13 @@ class NanobotBaseConversationEntity(ConversationEntity):
 
     @staticmethod
     async def _async_pump_stream(
-        stream: AsyncGenerator[str, None],
+        stream: AsyncGenerator[VoiceDelta, None],
         queue: asyncio.Queue[tuple[str, Any]],
     ) -> None:
-        """Move nanobot tokens into a queue so consumers can apply timeouts."""
+        """Move nanobot deltas into a queue so consumers can apply timeouts."""
         try:
-            async for token in stream:
-                await queue.put(("token", token))
+            async for delta in stream:
+                await queue.put(("delta", delta))
         except asyncio.CancelledError:
             raise
         except Exception as err:  # noqa: BLE001
@@ -243,7 +247,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
         text: str,
         session_id: str,
         user_input: ConversationInput,
-    ) -> AsyncGenerator[AssistantContentDeltaDict, None]:
+    ) -> AsyncGenerator[VoiceDelta, None]:
         """Translate nanobot voice events into chat log deltas.
 
         The response start is bounded by the configured timeout. Once nanobot
@@ -276,12 +280,12 @@ class NanobotBaseConversationEntity(ConversationEntity):
         )
         producer = asyncio.create_task(self._async_pump_stream(stream, queue))
 
-        first = True
-        received_token = False
+        started = False
+        received_content = False
 
         try:
             while True:
-                if first:
+                if not started:
                     try:
                         kind, value = await asyncio.wait_for(
                             queue.get(), timeout=self._timeout
@@ -290,6 +294,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
                         raise NanobotConnectionError(
                             "Timeout waiting for nanobot to start responding"
                         ) from err
+                    started = True
                 else:
                     kind, value = await queue.get()
 
@@ -298,14 +303,10 @@ class NanobotBaseConversationEntity(ConversationEntity):
                 if kind == "done":
                     break
 
-                token = cast(str, value)
-                received_token = True
-
-                if first:
-                    yield {"role": "assistant", "content": token}
-                    first = False
-                else:
-                    yield {"content": token}
+                delta = cast(VoiceDelta, value)
+                if delta.get("role") == "assistant" and delta.get("content"):
+                    received_content = True
+                yield delta
         finally:
             producer.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -313,7 +314,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
             with contextlib.suppress(Exception):
                 await stream.aclose()
 
-        if not received_token:
+        if not received_content:
             raise NanobotAPIError("nanobot returned an empty reply")
 
     async def _async_voice_token_stream(
@@ -324,12 +325,25 @@ class NanobotBaseConversationEntity(ConversationEntity):
         user_input: ConversationInput,
         *,
         inject_prompt: bool = False,
-    ) -> AsyncGenerator[str, None]:
-        """Yield speakable text from the voice gateway event stream."""
+    ) -> AsyncGenerator[VoiceDelta, None]:
+        """Yield chat log deltas from the voice gateway event stream."""
         turn_id = uuid4().hex
         completed = False
         spoken_segment = False
         filler_spoken = False
+        assistant_started = False
+        pending_tools: dict[str, str] = {}
+        pending_order: list[str] = []
+
+        def _assistant_delta(**kwargs: Any) -> AssistantContentDeltaDict:
+            """Build an assistant delta, adding the role only for a new message."""
+            nonlocal assistant_started
+            delta: AssistantContentDeltaDict = {}
+            if not assistant_started:
+                delta["role"] = "assistant"
+                assistant_started = True
+            delta.update(kwargs)
+            return delta
 
         try:
             async for event in client.stream_voice_turn(
@@ -349,18 +363,72 @@ class NanobotBaseConversationEntity(ConversationEntity):
                     segment = event.get("text") or ""
                     if segment:
                         spoken_segment = True
-                        yield segment
+                        yield _assistant_delta(content=segment)
                     continue
 
                 if event_type == "tool":
-                    if (
-                        event.get("state") == "started"
-                        and not spoken_segment
-                        and not filler_spoken
-                        and self._filler_text
-                    ):
-                        filler_spoken = True
-                        yield self._filler_text
+                    state = event.get("state")
+
+                    if state == "started":
+                        if (
+                            not spoken_segment
+                            and not filler_spoken
+                            and self._filler_text
+                        ):
+                            filler_spoken = True
+                            yield _assistant_delta(content=self._filler_text)
+
+                        tool_id = event.get("tool_call_id")
+                        if not isinstance(tool_id, str) or not tool_id:
+                            tool_id = uuid4().hex
+                        tool_name = str(event.get("name") or "nanobot_tool")
+                        pending_tools[tool_id] = tool_name
+                        pending_order.append(tool_id)
+                        yield _assistant_delta(
+                            tool_calls=[
+                                ToolInput(
+                                    tool_name=tool_name,
+                                    tool_args={},
+                                    id=tool_id,
+                                    external=True,
+                                )
+                            ]
+                        )
+                        continue
+
+                    if state in ("completed", "failed"):
+                        tool_id = event.get("tool_call_id")
+                        if not isinstance(tool_id, str) or not tool_id:
+                            if not pending_order:
+                                continue
+                            tool_id = pending_order.pop(0)
+                        elif tool_id in pending_order:
+                            pending_order.remove(tool_id)
+
+                        tool_name = str(
+                            event.get("name")
+                            or pending_tools.get(tool_id)
+                            or "nanobot_tool"
+                        )
+                        pending_tools.pop(tool_id, None)
+                        if state == "completed":
+                            result = ToolResult(data={"status": "completed"})
+                        else:
+                            result = ToolResult(
+                                data={
+                                    "error": str(
+                                        event.get("error") or "tool execution failed"
+                                    )
+                                },
+                                error=True,
+                            )
+                        yield {
+                            "role": "tool_result",
+                            "tool_call_id": tool_id,
+                            "tool_name": tool_name,
+                            "result": result,
+                        }
+                        assistant_started = False
                     continue
 
                 if event_type == "turn.completed":

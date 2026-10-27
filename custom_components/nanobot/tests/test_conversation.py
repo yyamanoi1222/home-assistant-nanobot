@@ -8,6 +8,7 @@ from homeassistant.components.conversation import (
     ChatLog,
     ConversationInput,
     ConversationResult,
+    ToolResultContent,
     UserContent,
 )
 from homeassistant.const import CONF_API_KEY
@@ -197,7 +198,64 @@ async def test_tool_filler_is_spoken_once(hass: HomeAssistant) -> None:
     ):
         result = await _process(entity, user_input)
 
-    assert result.response.speech["plain"]["speech"] == "確認しますね。晴れです。"
+    assert result.response.speech["plain"]["speech"] == "確認しますね。 晴れです。"
+
+
+async def test_tool_events_are_forwarded_as_external_tool_calls(
+    hass: HomeAssistant,
+) -> None:
+    """Test tool events become external tool call and result deltas."""
+    entity = _make_entity(hass, {**TEST_CONFIG, CONF_FILLER_TEXT: "確認しますね。"})
+    user_input = _make_input("天気は?", conversation_id="test-conversation")
+
+    async def _tool_stream(*args, **kwargs):
+        yield {
+            "type": "tool",
+            "name": "web_search",
+            "state": "started",
+            "tool_call_id": "call-1",
+        }
+        yield {
+            "type": "tool",
+            "name": "web_search",
+            "state": "completed",
+            "tool_call_id": "call-1",
+        }
+        yield {"type": "segment", "text": "晴れです。", "final": True}
+        yield {"type": "turn.completed", "content": "晴れです。"}
+
+    with (
+        patch(
+            "custom_components.nanobot.entity.async_get_clientsession",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
+            new=_tool_stream,
+        ),
+    ):
+        _result, chat_log = await _process_with_chat_log(entity, user_input)
+
+    assistant = [
+        content for content in chat_log.content if isinstance(content, AssistantContent)
+    ]
+    assert assistant[0].content == "確認しますね。"
+    assert assistant[0].tool_calls is not None
+    assert assistant[0].tool_calls[0].tool_name == "web_search"
+    assert assistant[0].tool_calls[0].external is True
+    assert assistant[0].tool_calls[0].id == "call-1"
+
+    tool_results = [
+        content
+        for content in chat_log.content
+        if isinstance(content, ToolResultContent)
+    ]
+    assert len(tool_results) == 1
+    assert tool_results[0].tool_call_id == "call-1"
+    assert tool_results[0].tool_name == "web_search"
+    assert tool_results[0].result.error is False
+
+    assert assistant[-1].content == "晴れです。"
 
 
 async def test_conversation_entity_error(hass: HomeAssistant) -> None:
