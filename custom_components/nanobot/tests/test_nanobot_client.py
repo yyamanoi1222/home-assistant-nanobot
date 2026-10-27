@@ -9,6 +9,7 @@ from custom_components.nanobot.nanobot_client import (
     NanobotAPIError,
     NanobotClient,
     NanobotConnectionError,
+    NanobotVoiceUnavailable,
 )
 
 
@@ -308,3 +309,93 @@ async def test_send_message_stream_has_no_total_timeout() -> None:
     assert timeout.total is None
     assert timeout.sock_read is None
     assert timeout.sock_connect == 123
+
+
+def _voice_response(lines: list[bytes]) -> MagicMock:
+    """Build a mocked voice SSE response."""
+    response = MagicMock(spec=aiohttp.ClientResponse)
+    response.ok = True
+    response.status = 200
+    response.content = _SseContent(lines)
+    return response
+
+
+async def test_stream_voice_turn_parses_events() -> None:
+    """Test structured voice events are parsed from SSE frames."""
+    session = MagicMock(spec=aiohttp.ClientSession)
+    response = _voice_response(
+        [
+            b"event: turn.started\n",
+            b'data: {"v":1,"type":"turn.started","seq":1}\n',
+            b"\n",
+            b": ping\n",
+            b"event: segment\n",
+            b'data: {"v":1,"type":"segment","seq":2,"text":"Hello","final":true}\n',
+            b"\n",
+            b"event: turn.completed\n",
+            b'data: {"v":1,"type":"turn.completed","seq":3,"content":"Hello"}\n',
+            b"\n",
+        ]
+    )
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    session.post.return_value = cm
+
+    client = NanobotClient(session=session, api_url="http://127.0.0.1:8900")
+    events = [
+        event
+        async for event in client.stream_voice_turn(
+            text="Hi",
+            session_id="s1",
+            turn_id="turn-1",
+            model="MiniMax-M2.7",
+            context={"device_id": "kitchen"},
+        )
+    ]
+
+    assert [event["type"] for event in events] == [
+        "turn.started",
+        "segment",
+        "turn.completed",
+    ]
+    payload = session.post.call_args.kwargs["json"]
+    assert payload["turn_id"] == "turn-1"
+    assert payload["session_key"] == "s1"
+    assert payload["model"] == "MiniMax-M2.7"
+    assert payload["context"] == {"device_id": "kitchen"}
+
+
+async def test_stream_voice_turn_unavailable() -> None:
+    """Test a 404 from the gateway raises a dedicated error."""
+    session = MagicMock(spec=aiohttp.ClientSession)
+    response = MagicMock(spec=aiohttp.ClientResponse)
+    response.ok = False
+    response.status = 404
+    response.text = AsyncMock(return_value="not found")
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    session.post.return_value = cm
+
+    client = NanobotClient(session=session, api_url="http://127.0.0.1:8900")
+    with pytest.raises(NanobotVoiceUnavailable):
+        async for _ in client.stream_voice_turn(text="Hi", session_id="s1"):
+            pass
+
+
+async def test_cancel_voice_turn_posts_to_turn_endpoint() -> None:
+    """Test cancellation targets the turn-specific endpoint."""
+    session = MagicMock(spec=aiohttp.ClientSession)
+    response = MagicMock(spec=aiohttp.ClientResponse)
+    response.status = 202
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    session.post.return_value = cm
+
+    client = NanobotClient(session=session, api_url="http://127.0.0.1:8900")
+    await client.cancel_voice_turn("turn-1")
+
+    url = session.post.call_args.args[0]
+    assert url == "http://127.0.0.1:8900/v1/voice/turns/turn-1/cancel"

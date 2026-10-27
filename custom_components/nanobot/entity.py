@@ -8,6 +8,7 @@ import re
 from collections.abc import AsyncGenerator
 from dataclasses import fields
 from typing import Any, cast
+from uuid import uuid4
 
 from homeassistant.components.conversation import (
     AssistantContent,
@@ -24,9 +25,11 @@ from homeassistant.helpers.intent import IntentResponse
 from .const import (
     CONF_API_KEY,
     CONF_API_URL,
+    CONF_FILLER_TEXT,
     CONF_MODEL,
     CONF_TIMEOUT,
     CONF_VOICE_PROMPT,
+    DEFAULT_FILLER_TEXT,
     DEFAULT_VOICE_PROMPT,
     DOMAIN,
     LOGGER,
@@ -125,6 +128,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
         self._model = config.get(CONF_MODEL)
         self._timeout = config.get(CONF_TIMEOUT, 120)
         self._voice_prompt = config.get(CONF_VOICE_PROMPT, DEFAULT_VOICE_PROMPT)
+        self._filler_text = config.get(CONF_FILLER_TEXT, DEFAULT_FILLER_TEXT)
         self._prompted_sessions: set[str] = set()
         self._last_response_text: str | None = None
 
@@ -184,7 +188,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
         try:
             async for _ in chat_log.async_add_delta_content_stream(
                 self.entity_id,
-                self._async_stream_reply(client, text, session_id),
+                self._async_stream_reply(client, text, session_id, user_input),
             ):
                 pass
         except NanobotClientError as err:
@@ -238,8 +242,9 @@ class NanobotBaseConversationEntity(ConversationEntity):
         client: NanobotClient,
         text: str,
         session_id: str,
+        user_input: ConversationInput,
     ) -> AsyncGenerator[AssistantContentDeltaDict, None]:
-        """Translate nanobot SSE fragments into chat log deltas.
+        """Translate nanobot voice events into chat log deltas.
 
         The response start is bounded by the configured timeout. Once nanobot
         starts streaming, no additional timeout is applied: long tool calls and
@@ -250,11 +255,7 @@ class NanobotBaseConversationEntity(ConversationEntity):
         message = f"{voice_prompt}\n\n{text}" if inject_prompt else text
 
         queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
-        stream = client.send_message_stream(
-            text=message,
-            session_id=session_id,
-            model=self._model,
-        )
+        stream = self._async_voice_token_stream(client, message, session_id, user_input)
         producer = asyncio.create_task(self._async_pump_stream(stream, queue))
 
         first = True
@@ -300,3 +301,64 @@ class NanobotBaseConversationEntity(ConversationEntity):
 
         if not received_token:
             raise NanobotAPIError("nanobot returned an empty reply")
+
+    async def _async_voice_token_stream(
+        self,
+        client: NanobotClient,
+        text: str,
+        session_id: str,
+        user_input: ConversationInput,
+    ) -> AsyncGenerator[str, None]:
+        """Yield speakable text from the voice gateway event stream."""
+        turn_id = uuid4().hex
+        completed = False
+        spoken_segment = False
+        filler_spoken = False
+
+        try:
+            async for event in client.stream_voice_turn(
+                text=text,
+                session_id=session_id,
+                model=self._model,
+                language=user_input.language or "ja",
+                context={
+                    "device_id": user_input.device_id,
+                    "conversation_id": user_input.conversation_id,
+                },
+                turn_id=turn_id,
+            ):
+                event_type = event.get("type")
+
+                if event_type == "segment":
+                    segment = event.get("text") or ""
+                    if segment:
+                        spoken_segment = True
+                        yield segment
+                    continue
+
+                if event_type == "tool":
+                    if (
+                        event.get("state") == "started"
+                        and not spoken_segment
+                        and not filler_spoken
+                        and self._filler_text
+                    ):
+                        filler_spoken = True
+                        yield self._filler_text
+                    continue
+
+                if event_type == "turn.completed":
+                    completed = True
+                    return
+
+                if event_type == "turn.cancelled":
+                    completed = True
+                    return
+
+                if event_type == "error":
+                    message = event.get("message") or "nanobot voice turn failed"
+                    raise NanobotAPIError(str(message))
+        finally:
+            if not completed:
+                with contextlib.suppress(Exception):
+                    await client.cancel_voice_turn(turn_id)

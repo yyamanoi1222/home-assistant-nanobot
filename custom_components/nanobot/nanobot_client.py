@@ -1,10 +1,12 @@
-"""Async client for the nanobot OpenAI-compatible API."""
+"""Async client for the nanobot voice gateway and chat API."""
 
 from __future__ import annotations
 
 import json
 from collections.abc import AsyncGenerator, Mapping
 from typing import Any
+from urllib.parse import quote
+from uuid import uuid4
 
 import aiohttp
 from homeassistant.exceptions import HomeAssistantError
@@ -31,8 +33,12 @@ class NanobotAPIError(NanobotClientError):
         self.status = status
 
 
+class NanobotVoiceUnavailable(NanobotAPIError):
+    """Error raised when the voice gateway endpoints are not available."""
+
+
 class NanobotClient:
-    """Thin client for nanobot's OpenAI-compatible chat completions API."""
+    """Thin client for the nanobot voice gateway and chat completions API."""
 
     def __init__(
         self,
@@ -46,7 +52,7 @@ class NanobotClient:
 
         Args:
             session: aiohttp session to use for requests.
-            api_url: Base URL of the nanobot API, e.g. http://127.0.0.1:8900.
+            api_url: Base URL of the nanobot voice gateway, e.g. http://127.0.0.1:8900.
             api_key: Optional Bearer token for authenticated endpoints.
             timeout: Request timeout in seconds.
         """
@@ -253,6 +259,136 @@ class NanobotClient:
             ) from err
         except TimeoutError as err:
             raise NanobotConnectionError("Request to nanobot timed out") from err
+
+    async def stream_voice_turn(
+        self,
+        *,
+        text: str,
+        session_id: str,
+        model: str | None = None,
+        language: str = "ja",
+        context: dict[str, Any] | None = None,
+        turn_id: str | None = None,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Run one voice turn against the nanobot voice gateway.
+
+        Yields the structured events documented by the gateway:
+        ``turn.started``, ``segment``, ``tool``, ``turn.completed``,
+        ``turn.cancelled`` and ``error``.
+        """
+        stripped_text = (text or "").strip()
+        if not stripped_text:
+            raise ValueError("text must not be empty")
+
+        turn_id = turn_id or uuid4().hex
+        url = f"{self._api_url}/v1/voice/turns"
+        payload: dict[str, Any] = {
+            "turn_id": turn_id,
+            "session_key": session_id,
+            "text": stripped_text,
+            "language": language,
+            "context": context or {},
+        }
+        if model is not None:
+            payload["model"] = model
+
+        LOGGER.debug(
+            "Voice turn request to nanobot (%s): %s",
+            url,
+            {**payload, "text": "<redacted>"},
+        )
+
+        headers = {**self._headers(), "Accept": "text/event-stream"}
+        try:
+            async with self._session.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=self._stream_timeout,
+            ) as response:
+                if not response.ok:
+                    error_text = await self._extract_error_text(response)
+                    if response.status in (404, 405):
+                        raise NanobotVoiceUnavailable(
+                            "nanobot voice gateway is not available",
+                            status=response.status,
+                        )
+                    raise NanobotAPIError(
+                        f"nanobot voice API error ({response.status}): {error_text}",
+                        status=response.status,
+                    )
+
+                event_name: str | None = None
+                data_lines: list[str] = []
+
+                async for raw_line in response.content:
+                    line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+                    if not line:
+                        if data_lines:
+                            yield self._decode_voice_event(event_name, data_lines)
+                        event_name = None
+                        data_lines = []
+                        continue
+
+                    if line.startswith(":"):
+                        continue
+                    if line.startswith("event:"):
+                        event_name = line[len("event:") :].strip()
+                    elif line.startswith("data:"):
+                        data_lines.append(line[len("data:") :].strip())
+
+                if data_lines:
+                    yield self._decode_voice_event(event_name, data_lines)
+        except aiohttp.ClientError as err:
+            raise NanobotConnectionError(
+                f"Error communicating with nanobot: {err}"
+            ) from err
+        except TimeoutError as err:
+            raise NanobotConnectionError("Request to nanobot timed out") from err
+
+    async def cancel_voice_turn(self, turn_id: str) -> None:
+        """Ask the gateway to cancel a running turn (best effort)."""
+        url = f"{self._api_url}/v1/voice/turns/{quote(turn_id, safe='')}/cancel"
+        try:
+            async with self._session.post(
+                url,
+                headers=self._headers(),
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as response:
+                if response.status not in (202, 204, 404):
+                    LOGGER.debug(
+                        "Cancel for turn %s returned %s",
+                        turn_id,
+                        response.status,
+                    )
+        except (aiohttp.ClientError, TimeoutError):
+            LOGGER.debug("Could not cancel turn %s", turn_id, exc_info=True)
+
+    @staticmethod
+    def _decode_voice_event(
+        event_name: str | None, data_lines: list[str]
+    ) -> dict[str, Any]:
+        """Decode one SSE event into a voice protocol event."""
+        data = "\n".join(data_lines)
+        try:
+            event = json.loads(data)
+        except ValueError as err:
+            raise NanobotAPIError(
+                "Invalid voice event from nanobot: malformed JSON"
+            ) from err
+
+        if not isinstance(event, dict):
+            raise NanobotAPIError(
+                "Invalid voice event from nanobot: expected JSON object"
+            )
+
+        if event_name and not event.get("type"):
+            event["type"] = event_name
+        if not event.get("type"):
+            raise NanobotAPIError(
+                "Invalid voice event from nanobot: missing event type"
+            )
+        return event
 
     @staticmethod
     async def _extract_error_text(response: aiohttp.ClientResponse) -> str:

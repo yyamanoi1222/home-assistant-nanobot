@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.nanobot.const import (
     CONF_API_URL,
+    CONF_FILLER_TEXT,
     CONF_MODEL,
     CONF_TIMEOUT,
     CONF_VOICE_PROMPT,
@@ -65,17 +66,23 @@ def _make_chat_log(
 
 
 def _streaming_reply(text: str):
-    """Return a send_message_stream replacement that yields ``text`` in chunks."""
+    """Return a stream_voice_turn replacement that yields ``text`` in chunks."""
 
     async def _stream(*args, **kwargs):
+        yield {"type": "turn.started"}
         for index in range(0, len(text), 5):
-            yield text[index : index + 5]
+            yield {
+                "type": "segment",
+                "text": text[index : index + 5],
+                "final": index + 5 >= len(text),
+            }
+        yield {"type": "turn.completed", "content": text}
 
     return _stream
 
 
 class _RecordingStream:
-    """Record send_message_stream calls and stream a fixed reply."""
+    """Record stream_voice_turn calls and stream a fixed reply."""
 
     def __init__(self, text: str) -> None:
         self.text = text
@@ -86,8 +93,14 @@ class _RecordingStream:
         return self._stream()
 
     async def _stream(self):
+        yield {"type": "turn.started"}
         for index in range(0, len(self.text), 5):
-            yield self.text[index : index + 5]
+            yield {
+                "type": "segment",
+                "text": self.text[index : index + 5],
+                "final": index + 5 >= len(self.text),
+            }
+        yield {"type": "turn.completed", "content": self.text}
 
 
 def _make_entity(hass: HomeAssistant, config: dict | None = None):
@@ -130,7 +143,7 @@ async def test_conversation_entity_process(hass: HomeAssistant) -> None:
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=_streaming_reply("Hi there!"),
         ),
     ):
@@ -139,6 +152,32 @@ async def test_conversation_entity_process(hass: HomeAssistant) -> None:
     assert isinstance(result, ConversationResult)
     assert result.response.speech["plain"]["speech"] == "Hi there!"
     assert result.conversation_id == "test-conversation"
+
+
+async def test_tool_filler_is_spoken_once(hass: HomeAssistant) -> None:
+    """Test a filler is spoken when a tool starts before any reply text."""
+    entity = _make_entity(hass, {**TEST_CONFIG, CONF_FILLER_TEXT: "確認しますね。"})
+    user_input = _make_input("天気は?", conversation_id="test-conversation")
+
+    async def _tool_stream(*args, **kwargs):
+        yield {"type": "tool", "name": "web_search", "state": "started"}
+        yield {"type": "tool", "name": "web_search", "state": "completed"}
+        yield {"type": "segment", "text": "晴れです。", "final": True}
+        yield {"type": "turn.completed", "content": "晴れです。"}
+
+    with (
+        patch(
+            "custom_components.nanobot.entity.async_get_clientsession",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
+            new=_tool_stream,
+        ),
+    ):
+        result = await _process(entity, user_input)
+
+    assert result.response.speech["plain"]["speech"] == "確認しますね。晴れです。"
 
 
 async def test_conversation_entity_error(hass: HomeAssistant) -> None:
@@ -156,7 +195,7 @@ async def test_conversation_entity_error(hass: HomeAssistant) -> None:
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=_failing_stream,
         ),
     ):
@@ -178,7 +217,7 @@ async def test_conversation_entity_session_id_mapping(hass: HomeAssistant) -> No
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=stream,
         ),
     ):
@@ -200,7 +239,7 @@ async def test_conversation_entity_model_mapping(hass: HomeAssistant) -> None:
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=stream,
         ),
     ):
@@ -224,7 +263,7 @@ async def test_conversation_entity_session_id_falls_back_to_device_id(
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=stream,
         ),
     ):
@@ -247,7 +286,7 @@ async def test_conversation_entity_session_id_falls_back_to_entry_id(
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=_streaming_reply("OK"),
         ),
     ):
@@ -270,7 +309,7 @@ async def test_continue_conversation_always_on_success(hass: HomeAssistant) -> N
                 return_value=MagicMock(),
             ),
             patch(
-                "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+                "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
                 new=_streaming_reply(reply),
             ),
         ):
@@ -293,7 +332,7 @@ async def test_conversation_entity_ignores_echoed_reply(hass: HomeAssistant) -> 
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=stream,
         ),
     ):
@@ -331,7 +370,7 @@ async def test_conversation_entity_does_not_drop_short_reply(
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=stream,
         ),
     ):
@@ -355,7 +394,7 @@ async def _send_and_get_message(hass: HomeAssistant, config: dict | None = None)
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=stream,
         ),
     ):
@@ -400,7 +439,7 @@ async def test_voice_prompt_only_on_first_turn(hass: HomeAssistant) -> None:
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=stream,
         ),
     ):
@@ -422,7 +461,7 @@ async def test_voice_prompt_reapplied_for_new_session(hass: HomeAssistant) -> No
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=stream,
         ),
     ):
@@ -448,7 +487,7 @@ async def test_conversation_entity_ignores_partial_echo(
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=stream,
         ),
     ):
@@ -478,7 +517,7 @@ async def test_fast_reply_does_not_emit_tool_call(
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=_streaming_reply("Hi there!"),
         ),
     ):
@@ -498,9 +537,14 @@ async def test_slow_stream_is_not_cut_off(hass: HomeAssistant) -> None:
     user_input = _make_input("天気は?", conversation_id="test-conversation")
 
     async def _slow_stream(*args, **kwargs):
-        yield "Webで調べますね。"
+        yield {"type": "turn.started"}
+        yield {"type": "segment", "text": "Webで調べますね。"}
         await asyncio.sleep(0.05)
-        yield "晴れです。"
+        yield {"type": "segment", "text": "晴れです。"}
+        yield {
+            "type": "turn.completed",
+            "content": "Webで調べますね。晴れです。",
+        }
 
     with (
         patch(
@@ -508,7 +552,7 @@ async def test_slow_stream_is_not_cut_off(hass: HomeAssistant) -> None:
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=_slow_stream,
         ),
     ):
@@ -533,7 +577,8 @@ async def test_first_token_timeout_returns_error(hass: HomeAssistant) -> None:
 
     async def _slow_stream(*args, **kwargs):
         await asyncio.sleep(0.05)
-        yield "too late"
+        yield {"type": "segment", "text": "too late"}
+        yield {"type": "turn.completed", "content": "too late"}
 
     with (
         patch(
@@ -541,7 +586,7 @@ async def test_first_token_timeout_returns_error(hass: HomeAssistant) -> None:
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=_slow_stream,
         ),
     ):
@@ -565,7 +610,7 @@ async def test_empty_stream_returns_error(hass: HomeAssistant) -> None:
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.nanobot.entity.NanobotClient.send_message_stream",
+            "custom_components.nanobot.entity.NanobotClient.stream_voice_turn",
             new=_empty_stream,
         ),
     ):

@@ -11,6 +11,9 @@ CONF_API_KEY: str = "api_key"
 CONF_TIMEOUT: str = "timeout"
 CONF_MODEL: str = "model"
 CONF_VOICE_PROMPT: str = "voice_prompt"
+CONF_FILLER_TEXT: str = "filler_text"
+
+DEFAULT_FILLER_TEXT: str = "確認しますね。"
 
 DEFAULT_VOICE_PROMPT: str = (
     "あなたはHome Assistantの音声アシスタントです。"

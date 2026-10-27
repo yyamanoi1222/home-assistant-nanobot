@@ -25,10 +25,12 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_API_URL,
+    CONF_FILLER_TEXT,
     CONF_MODEL,
     CONF_TIMEOUT,
     CONF_VOICE_PROMPT,
     DEFAULT_API_URL,
+    DEFAULT_FILLER_TEXT,
     DEFAULT_TIMEOUT,
     DEFAULT_VOICE_PROMPT,
     DOMAIN,
@@ -55,6 +57,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Optional(CONF_VOICE_PROMPT, default=DEFAULT_VOICE_PROMPT): TextSelector(
             TextSelectorConfig(multiline=True)
         ),
+        vol.Optional(CONF_FILLER_TEXT, default=DEFAULT_FILLER_TEXT): TextSelector(),
     }
 )
 
@@ -126,6 +129,10 @@ class NanobotOptionsFlow(OptionsFlow):
             CONF_VOICE_PROMPT,
             self.config_entry.data.get(CONF_VOICE_PROMPT, DEFAULT_VOICE_PROMPT),
         )
+        current_filler = self.config_entry.options.get(
+            CONF_FILLER_TEXT,
+            self.config_entry.data.get(CONF_FILLER_TEXT, DEFAULT_FILLER_TEXT),
+        )
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -133,6 +140,9 @@ class NanobotOptionsFlow(OptionsFlow):
                     vol.Optional(
                         CONF_VOICE_PROMPT, default=current_prompt
                     ): TextSelector(TextSelectorConfig(multiline=True)),
+                    vol.Optional(
+                        CONF_FILLER_TEXT, default=current_filler
+                    ): TextSelector(),
                 }
             ),
         )

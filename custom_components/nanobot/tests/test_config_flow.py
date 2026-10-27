@@ -42,15 +42,15 @@ async def test_user_flow_success(hass: HomeAssistant) -> None:
         "custom_components.nanobot.config_flow._validate_input",
         return_value=None,
     ):
-            result = await flow.async_step_user(
-                {
-                    CONF_API_URL: DEFAULT_API_URL,
-                    CONF_API_KEY: "",
-                    CONF_MODEL: "MiniMax-M2.7",
-                    CONF_TIMEOUT: DEFAULT_TIMEOUT,
-                    CONF_VOICE_PROMPT: DEFAULT_VOICE_PROMPT,
-                }
-            )
+        result = await flow.async_step_user(
+            {
+                CONF_API_URL: DEFAULT_API_URL,
+                CONF_API_KEY: "",
+                CONF_MODEL: "MiniMax-M2.7",
+                CONF_TIMEOUT: DEFAULT_TIMEOUT,
+                CONF_VOICE_PROMPT: DEFAULT_VOICE_PROMPT,
+            }
+        )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "127.0.0.1:8900"

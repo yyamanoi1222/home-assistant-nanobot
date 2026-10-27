@@ -8,14 +8,16 @@
           "api_key": "API Key (optional)",
           "model": "Model (optional)",
           "timeout": "Response start timeout (seconds)",
-          "voice_prompt": "Voice response prompt"
+          "voice_prompt": "Voice response prompt",
+          "filler_text": "Tool-call filler (optional)"
         },
         "data_description": {
-          "api_url": "The nanobot OpenAI-compatible API endpoint, e.g. http://127.0.0.1:8900",
-          "api_key": "API key only required when nanobot is bound to 0.0.0.0 or LAN",
-          "model": "Model name shown by /v1/models; leave empty to use nanobot's default",
+          "api_url": "The nanobot voice gateway endpoint, e.g. http://127.0.0.1:8900",
+          "api_key": "API key only required when the gateway is bound to 0.0.0.0 or LAN",
+          "model": "Model name to pass to nanobot; leave empty to use the gateway default",
           "timeout": "Maximum seconds to wait for nanobot to connect and start responding. Long tool calls are not cut off by this timeout.",
-          "voice_prompt": "Instructions prepended to the first request of each session so spoken replies stay short and free of formatting. Leave empty to disable."
+          "voice_prompt": "Instructions prepended to the first request of each session so spoken replies stay short and free of formatting. Leave empty to disable.",
+          "filler_text": "Spoken once when a tool starts before any reply text. Leave empty to disable."
         }
       }
     },
@@ -32,10 +34,12 @@
     "step": {
       "init": {
         "data": {
-          "voice_prompt": "Voice response prompt"
+          "voice_prompt": "Voice response prompt",
+          "filler_text": "Tool-call filler (optional)"
         },
         "data_description": {
-          "voice_prompt": "Instructions prepended to the first request of each session so spoken replies stay short and free of formatting. Leave empty to disable."
+          "voice_prompt": "Instructions prepended to the first request of each session so spoken replies stay short and free of formatting. Leave empty to disable.",
+          "filler_text": "Spoken once when a tool starts before any reply text. Leave empty to disable."
         }
       }
     }

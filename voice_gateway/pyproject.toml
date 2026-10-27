@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nanobot-voice-gateway"
+version = "0.1.0"
+description = "SSE voice gateway wrapping the nanobot Python SDK for Home Assistant"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9",
+    "nanobot-ai>=0.3.5",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+nanobot-voice-gateway = "nanobot_voice_gateway.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["nanobot_voice_gateway"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
