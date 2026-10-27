@@ -21,6 +21,7 @@ from custom_components.nanobot.const import (
     CONF_TIMEOUT,
     CONF_VOICE_PROMPT,
     DEFAULT_VOICE_PROMPT,
+    INTERNAL_SYSTEM_PROMPT,
 )
 from custom_components.nanobot.nanobot_client import NanobotConnectionError
 
@@ -29,6 +30,16 @@ TEST_CONFIG = {
     CONF_API_KEY: "",
     CONF_TIMEOUT: 120,
 }
+
+
+def _expected_message(text: str, voice_prompt: str = DEFAULT_VOICE_PROMPT) -> str:
+    """Build the expected first-turn message."""
+    prompt = (
+        f"{INTERNAL_SYSTEM_PROMPT}\n\n{voice_prompt}"
+        if voice_prompt
+        else INTERNAL_SYSTEM_PROMPT
+    )
+    return f"{prompt}\n\n{text}"
 
 
 def _make_input(
@@ -487,7 +498,7 @@ async def test_default_voice_prompt_is_prepended(hass: HomeAssistant) -> None:
     """Test the default voice prompt is prepended to the user message."""
     message = await _send_and_get_message(hass)
 
-    assert message == f"{DEFAULT_VOICE_PROMPT}\n\nHello"
+    assert message == _expected_message("Hello")
 
 
 async def test_custom_voice_prompt_is_prepended(hass: HomeAssistant) -> None:
@@ -496,14 +507,16 @@ async def test_custom_voice_prompt_is_prepended(hass: HomeAssistant) -> None:
         hass, {**TEST_CONFIG, CONF_VOICE_PROMPT: "短く話してください。"}
     )
 
-    assert message == "短く話してください。\n\nHello"
+    assert message == _expected_message("Hello", "短く話してください。")
 
 
-async def test_empty_voice_prompt_is_disabled(hass: HomeAssistant) -> None:
-    """Test an empty voice prompt sends the user message unchanged."""
+async def test_empty_voice_prompt_still_uses_internal_prompt(
+    hass: HomeAssistant,
+) -> None:
+    """Test an empty voice prompt still sends the internal prompt."""
     message = await _send_and_get_message(hass, {**TEST_CONFIG, CONF_VOICE_PROMPT: ""})
 
-    assert message == "Hello"
+    assert message == _expected_message("Hello", "")
 
 
 async def test_voice_prompt_only_on_first_turn(hass: HomeAssistant) -> None:
@@ -524,7 +537,7 @@ async def test_voice_prompt_only_on_first_turn(hass: HomeAssistant) -> None:
         await _process(entity, _make_input("Hello", conversation_id="same"))
         await _process(entity, _make_input("Again", conversation_id="same"))
 
-    assert stream.calls[0]["text"] == f"{DEFAULT_VOICE_PROMPT}\n\nHello"
+    assert stream.calls[0]["text"] == _expected_message("Hello")
     assert stream.calls[1]["text"] == "Again"
 
 
@@ -548,8 +561,8 @@ async def test_voice_prompt_reapplied_after_cancelled_first_turn(
         await _process(entity, _make_input("Hello", conversation_id="same"))
         await _process(entity, _make_input("Again", conversation_id="same"))
 
-    assert stream.calls[0]["text"] == f"{DEFAULT_VOICE_PROMPT}\n\nHello"
-    assert stream.calls[1]["text"] == f"{DEFAULT_VOICE_PROMPT}\n\nAgain"
+    assert stream.calls[0]["text"] == _expected_message("Hello")
+    assert stream.calls[1]["text"] == _expected_message("Again")
 
 
 async def test_voice_prompt_reapplied_for_new_session(hass: HomeAssistant) -> None:
@@ -570,8 +583,8 @@ async def test_voice_prompt_reapplied_for_new_session(hass: HomeAssistant) -> No
         await _process(entity, _make_input("Hello", conversation_id="one"))
         await _process(entity, _make_input("Again", conversation_id="two"))
 
-    assert stream.calls[0]["text"] == f"{DEFAULT_VOICE_PROMPT}\n\nHello"
-    assert stream.calls[1]["text"] == f"{DEFAULT_VOICE_PROMPT}\n\nAgain"
+    assert stream.calls[0]["text"] == _expected_message("Hello")
+    assert stream.calls[1]["text"] == _expected_message("Again")
 
 
 async def test_conversation_entity_ignores_partial_echo(

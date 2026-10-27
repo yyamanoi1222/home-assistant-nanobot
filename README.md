@@ -10,7 +10,8 @@ The integration requires the bundled [voice gateway](voice_gateway/README.md). I
 
 - Turn-based voice conversation through the nanobot voice gateway
 - Sentence-sized segments from the voice gateway, so Assist can start speaking early
-- Tool events and an optional spoken filler while a tool is running
+- Tool events, with the model asked to announce tool use before it runs
+- Optional fallback filler for models that do not announce tool use
 - Cancellation-aware streaming for Assist barge-in
 - Conversation history handled by nanobot using `session_id`
 - Optional model selection
@@ -40,8 +41,8 @@ The integration requires the bundled [voice gateway](voice_gateway/README.md). I
 4. Fill in the API key only if the gateway is bound to `0.0.0.0` or a remote interface.
 5. Optionally enter a model name.
 6. Adjust the response start timeout if needed. It bounds the initial connection and the wait for the first segment; long tool calls are not cut off by the HA-side timeout.
-7. Optionally edit the voice response prompt, which keeps spoken replies short and free of formatting. Leave it empty to disable.
-8. Optionally set a tool-call filler. It is spoken once if a tool starts before any reply text. Leave it empty to disable.
+7. Optionally edit the voice response prompt, which keeps spoken replies short and free of formatting. The integration always adds a fixed internal prompt that asks the model to announce tool use first.
+8. Optionally set a fallback tool-call filler. It is only spoken if a tool starts before the model has produced any text. Leave it empty to rely on the model's announcement. Edge TTS needs at least 20 characters for the first streamed chunk, so keep that in mind if you use a fallback.
 
 ## Usage
 
@@ -70,7 +71,8 @@ nanobot-voice-gateway --port 8900
 
 - The integration always sends only the latest utterance and uses the conversation `session_id` for continuity.
 - Device control is available through nanobot tools executed by the gateway. Tool side effects cannot be rolled back when a turn is cancelled.
-- Streaming TTS requires a TTS engine that implements `async_stream_tts_audio` (for example, Microsoft Edge TTS). Assist only starts streaming after roughly 60 characters, so short replies still wait for the full answer.
+- Streaming TTS requires a TTS engine that implements `async_stream_tts_audio` (for example, Microsoft Edge TTS). Assist starts streaming after roughly 60 characters or after a tool call, so short replies without tools still wait for the full answer.
+- Edge TTS buffers the first streamed chunk until it has at least 20 characters. A fallback filler shorter than that is merged into the final answer. The internal prompt asks the model to announce tool use in a sentence of 20 or more characters.
 - If Assist cancels a turn, the integration asks the gateway to stop the run and roll back that turn's session history.
-- The voice response prompt is prepended to the first request of each HA session and is therefore stored in nanobot's session history. Other nanobot channels such as Discord are unaffected.
+- A fixed internal prompt is always prepended to the first request of each HA session, followed by the optional voice response prompt. This is stored in nanobot's session history. Other nanobot channels such as Discord are unaffected.
 - If the gateway is unreachable or does not support the voice protocol, requests fail. There is intentionally no fallback to the OpenAI-compatible endpoint.

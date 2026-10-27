@@ -16,8 +16,8 @@
           "api_key": "API key only required when the gateway is bound to 0.0.0.0 or LAN",
           "model": "Model name to pass to nanobot; leave empty to use the gateway default",
           "timeout": "Maximum seconds to wait for nanobot to connect and start responding. Long tool calls are not cut off by this timeout.",
-          "voice_prompt": "Instructions prepended to the first request of each session so spoken replies stay short and free of formatting. Leave empty to disable.",
-          "filler_text": "Spoken once when a tool starts before any reply text. Leave empty to disable."
+          "voice_prompt": "Additional instructions prepended to the first request of each session so spoken replies stay short and free of formatting. The integration always adds its own internal tool-use instruction.",
+          "filler_text": "Fallback spoken once if a tool starts before the model has produced any text. Leave empty to rely on the model announcement. Edge TTS needs at least 20 characters."
         }
       }
     },
@@ -38,8 +38,8 @@
           "filler_text": "Tool-call filler (optional)"
         },
         "data_description": {
-          "voice_prompt": "Instructions prepended to the first request of each session so spoken replies stay short and free of formatting. Leave empty to disable.",
-          "filler_text": "Spoken once when a tool starts before any reply text. Leave empty to disable."
+          "voice_prompt": "Additional instructions prepended to the first request of each session so spoken replies stay short and free of formatting. The integration always adds its own internal tool-use instruction.",
+          "filler_text": "Fallback spoken once if a tool starts before the model has produced any text. Leave empty to rely on the model announcement. Edge TTS needs at least 20 characters."
         }
       }
     }

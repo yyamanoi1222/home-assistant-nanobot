@@ -34,6 +34,7 @@ from .const import (
     DEFAULT_FILLER_TEXT,
     DEFAULT_VOICE_PROMPT,
     DOMAIN,
+    INTERNAL_SYSTEM_PROMPT,
     LOGGER,
 )
 from .nanobot_client import (
@@ -255,20 +256,30 @@ class NanobotBaseConversationEntity(ConversationEntity):
         pauses must not cut the reply off.
         """
         voice_prompt = (self._voice_prompt or "").strip()
-        inject_prompt = bool(voice_prompt) and session_id not in self._prompted_sessions
-        message = f"{voice_prompt}\n\n{text}" if inject_prompt else text
+        prompt_parts = [INTERNAL_SYSTEM_PROMPT]
+        if voice_prompt:
+            prompt_parts.append(voice_prompt)
+        prompt = "\n\n".join(prompt_parts)
+        inject_prompt = session_id not in self._prompted_sessions
+        message = f"{prompt}\n\n{text}" if inject_prompt else text
 
         if inject_prompt:
             LOGGER.debug(
-                "Applying voice prompt to session %s: %s", session_id, voice_prompt
+                "Applying internal prompt to session %s: %s",
+                session_id,
+                INTERNAL_SYSTEM_PROMPT,
             )
-        elif voice_prompt:
+            if voice_prompt:
+                LOGGER.debug(
+                    "Applying voice prompt to session %s: %s",
+                    session_id,
+                    voice_prompt,
+                )
+        else:
             LOGGER.debug(
-                "Voice prompt already sent for session %s; not applying it again",
+                "Prompts already sent for session %s; not applying them again",
                 session_id,
             )
-        else:
-            LOGGER.debug("Voice prompt disabled for session %s", session_id)
 
         queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
         stream = self._async_voice_token_stream(

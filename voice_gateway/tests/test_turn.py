@@ -130,6 +130,55 @@ async def test_completed_turn_emits_final_segment() -> None:
     assert not any(call[0] == "clear" for call in bot.sessions.calls)
 
 
+async def test_tool_start_flushes_pending_text_first() -> None:
+    run = FakeRun(
+        [
+            SimpleNamespace(type="text.delta", delta="調べますね。"),
+            SimpleNamespace(
+                type="tool.started",
+                name="web_search",
+                tool_call_id="call-1",
+            ),
+            SimpleNamespace(
+                type="tool.completed",
+                name="web_search",
+                tool_call_id="call-1",
+            ),
+            SimpleNamespace(type="text.delta", delta="晴れです。"),
+            SimpleNamespace(type="text.completed", resuming=False),
+            SimpleNamespace(
+                type="run.completed",
+                result=SimpleNamespace(
+                    content="晴れです。",
+                    tools_used=["web_search"],
+                    usage={},
+                    stop_reason="completed",
+                ),
+            ),
+        ]
+    )
+    bot = FakeBot(run)
+    runner = TurnRunner(bot=bot, config=GatewayConfig(), request=_request())
+
+    await runner.run()
+    events = await _drain(runner)
+
+    assert [event["type"] for event in events] == [
+        "turn.started",
+        "segment",
+        "tool",
+        "tool",
+        "segment",
+        "turn.completed",
+    ]
+    assert events[1]["text"] == "調べますね。"
+    assert events[1]["final"] is False
+    assert events[2]["state"] == "started"
+    assert events[3]["state"] == "completed"
+    assert events[4]["text"] == "晴れです。"
+    assert events[4]["final"] is True
+
+
 async def test_completed_turn_serializes_usage_object() -> None:
     @dataclass
     class FakeUsage:

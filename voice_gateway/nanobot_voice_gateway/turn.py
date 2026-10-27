@@ -342,6 +342,7 @@ class TurnRunner:
             return
 
         if event_type == "tool.started":
+            self._flush_pending_text(final=False)
             self._emit(
                 "tool",
                 name=getattr(event, "name", None),
@@ -397,6 +398,24 @@ class TurnRunner:
         text = self._held
         self._held = None
         self._emit_segment(text, final=final)
+
+    def _flush_pending_text(self, *, final: bool) -> None:
+        """Flush held and buffered text before a tool call."""
+        if self._final_emitted:
+            return
+
+        parts: list[str] = []
+        if self._held is not None:
+            parts.append(self._held)
+            self._held = None
+        parts.extend(self._segmenter.flush())
+
+        if not parts:
+            return
+
+        for segment in parts[:-1]:
+            self._emit_segment(segment, final=False)
+        self._emit_segment(parts[-1], final=final)
 
     def _finalize_segments(self) -> None:
         if self._final_emitted:

@@ -13,7 +13,12 @@ CONF_MODEL: str = "model"
 CONF_VOICE_PROMPT: str = "voice_prompt"
 CONF_FILLER_TEXT: str = "filler_text"
 
-DEFAULT_FILLER_TEXT: str = "確認しますね。"
+DEFAULT_FILLER_TEXT: str = ""
+
+INTERNAL_SYSTEM_PROMPT: str = (
+    "ツールを使う前に、これから何をするかを20文字以上の一文で必ず伝えてください。"
+    "前置きなしでツールを呼び出してはいけません。"
+)
 
 DEFAULT_VOICE_PROMPT: str = (
     "あなたはHome Assistantの音声アシスタントです。"
